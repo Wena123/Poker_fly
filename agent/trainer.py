@@ -1,7 +1,7 @@
 from pathlib import Path
 import numpy as np
 
-from poker.env import PokerEnv
+from poker.env import PokerEnv, ACTION_COUNT
 from .simple_brain import SimpleFlyBrain
 from .evolution import Evolution
 
@@ -22,6 +22,7 @@ class Trainer:
                 self.obs_size,
                 hidden_1=config.hidden_1,
                 hidden_2=config.hidden_2,
+                output_size=ACTION_COUNT,
                 rng=rng,
             )
             for _ in range(4)

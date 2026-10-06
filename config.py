@@ -6,7 +6,8 @@ class Config:
     starting_stack: int = 1000
     small_blind: int = 5
     big_blind: int = 10
-    max_raises_per_street: int = 3
+    # Safety guard only; normal no-limit betting is stack-limited.
+    max_actions_per_street: int = 600
 
     # Ewolucja
     population: int = 4

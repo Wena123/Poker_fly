@@ -28,6 +28,8 @@ def main():
 
     try:
         trainer.run(generations=args.generations)
+    except KeyboardInterrupt:
+        print("\nStopped by user.")
     finally:
         if renderer is not None:
             renderer.close()
