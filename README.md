@@ -426,3 +426,218 @@ current penalized fitness plus bust percentages.
 
 Old V10/V11 flat-head checkpoints can still be loaded; their old 14-output head
 is converted into the new action/sizing heads as a compatibility approximation.
+
+# V13 — Strong BOT + WATCH / RESUME modes
+
+V13 adds a fixed rule-based poker opponent and explicit modes for training and watching checkpoints.
+
+## StrongPokerBot
+
+`agent/strong_bot.py` is a fast no-limit Hold'em baseline intended for millions of training hands.
+It uses only the exact observation available to a normal player:
+
+- its own two hole cards,
+- public board cards,
+- pot and amount to call,
+- stack and current bet,
+- position,
+- public previous actions,
+- legal action mask.
+
+It does **not** read opponents' hidden cards.
+
+The bot uses:
+
+- preflop hand quality,
+- made-hand strength after the flop,
+- flush/straight draw detection,
+- pot odds,
+- stack-to-pot ratio (SPR),
+- position,
+- natural bet sizing,
+- a small mixed-strategy component so it is less trivial to exploit.
+
+ALL-IN is intentionally difficult for the bot to select unless the hand is extremely strong or the SPR is already low. The bot is a strong fixed baseline/teacher, not a claim of GTO-perfect poker.
+
+## Modes
+
+### 1. Train without BOT
+
+```bash
+python main.py --generations 500 --hands 5000
+```
+
+Four flies play self-play. No UI, fastest mode.
+
+### 2. Train with BOT
+
+```bash
+python main.py --generations 500 --hands 5000 --with-bot
+```
+
+One BOT seat rotates every hand. The fly whose normal seat is occupied sits that hand out. Over every four hands each candidate fly plays exactly three hands against the BOT. Fitness is normalized by the number of hands actually played by each fly.
+
+The BOT is never mutated and never becomes champion. The flies learn from it through evolutionary pressure: strategies that perform better against the BOT are more likely to survive.
+
+### 3. Watch checkpoint WITHOUT learning
+
+```bash
+python main.py --watch checkpoints/best_brain_gen_0250.npz
+```
+
+This automatically enables Pygame + the OpenCV monitor.
+
+- mutation OFF
+- evolution OFF
+- saving OFF
+- checkpoint is copied into four seats
+- only observation/playback happens
+
+Limit the watch session with:
+
+```bash
+python main.py --watch checkpoints/best_brain_gen_0250.npz --hands 200
+```
+
+### 4. Watch checkpoint WITHOUT learning, against BOT
+
+```bash
+python main.py --watch checkpoints/best_brain_gen_0250.npz --with-bot
+```
+
+Three copies of the checkpoint play against the fixed BOT in seat 4.
+
+### 5. Watch WHILE learning from checkpoint
+
+```bash
+python main.py --watch-train checkpoints/best_brain_gen_0250.npz --generations 100 --hands 5000
+```
+
+This resumes training and enables the UI. `--watch-train` shows every hand by default.
+
+Against the BOT:
+
+```bash
+python main.py --watch-train checkpoints/best_brain_gen_0250.npz --with-bot --generations 100 --hands 5000
+```
+
+### 6. Watch WHILE learning from scratch
+
+```bash
+python main.py --render --render-every 1 --generations 100 --hands 5000
+```
+
+With BOT:
+
+```bash
+python main.py --render --render-every 1 --with-bot --generations 100 --hands 5000
+```
+
+### 7. Resume training without watching
+
+```bash
+python main.py --resume checkpoints/best_brain_gen_0250.npz --generations 500 --hands 5000
+```
+
+With BOT:
+
+```bash
+python main.py --resume checkpoints/best_brain_gen_0250.npz --with-bot --generations 500 --hands 5000
+```
+
+The next checkpoint continues numbering from the loaded file. For example, loading `best_brain_gen_0250.npz` begins at generation 251.
+
+### Latest-checkpoint shortcuts
+
+```bash
+python main.py --resume-latest
+python main.py --resume-latest --with-bot
+python main.py --watch-latest
+python main.py --watch-latest --with-bot
+python main.py --watch-train-latest
+python main.py --watch-train-latest --with-bot
+```
+
+## UI changes
+
+- Pygame now displays `BOT` when a bot occupies a seat.
+- Winner/favorite/equity labels also use the real seat name.
+- Header shows `TRAINING • LEARNING ON`, `WATCH • NO LEARNING`, and BOT status.
+- OpenCV monitor marks a bot panel as `RULE BOT` instead of pretending it is a neural fly.
+- Pause now actually pauses the live simulation instead of only changing the button text.
+
+## Tests
+
+```bash
+python tests_smoke.py
+python tests_actions.py
+python tests_hierarchical.py
+python tests_modes.py
+```
+
+
+## V14 — winner hand banner + chip placement
+
+- SB / BB chips and dealer button were moved lower so they no longer cover LAST ACTION.
+- Bottom player panels were moved slightly upward to preserve room above the speed footer.
+- End-of-hand banner now shows the winning poker hand, for example:
+  - `FLY 1 WON WITH STRAIGHT`
+  - `FLY 3 WON WITH FULL HOUSE`
+  - `BOT WON WITH ROYAL FLUSH`
+- Split/side-pot outcomes show winner labels plus their hand categories when available.
+- If the hand ends before a 5-card hand can be evaluated, the banner says that the other players folded.
+
+
+## V15 — big result popup + recent wins
+
+- The winner message is now a large centered popup.
+- Example: `FLY 1 WON WITH STRAIGHT`.
+- The popup also shows the actual chips collected from the pot.
+- Non-FAST mode holds the popup for ~0.9 seconds.
+- FAST mode adds no extra delay.
+- Added a compact `RECENT WINS` panel with the latest six hands.
+- History includes winner(s), chips collected and winning hand.
+- Main/side-pot payouts and split pots are supported.
+
+
+## V16 — persistent winner-takes-all table sessions
+
+This changes the core game loop.
+
+A table starts:
+- F1 = 1000
+- F2 = 1000
+- F3 = 1000
+- F4 = 1000
+- total bank = 4000
+
+Stacks now persist between hands. A player that reaches 0 is eliminated:
+- receives no more hole cards,
+- posts no blinds,
+- cannot act,
+- remains out until the table is finished.
+
+Dealer and blinds skip eliminated seats. Heads-up blind/action order is handled separately.
+
+The table resets ONLY when exactly one seat remains. Because chips are conserved,
+that player must have all 4000 chips. The next hand then starts a new table at
+1000 / 1000 / 1000 / 1000.
+
+Training:
+- `--hands` is now a minimum hand target per generation.
+- if the target is reached during an unfinished table, that table is completed
+  before evolution selects the champion.
+- table wins and session bust rate are tracked.
+- with `--with-bot`, the bot keeps one fixed seat for a whole table session;
+  its seat rotates between sessions.
+
+Pygame V16:
+- logical canvas increased to 1600×1000,
+- larger cards and player panels,
+- new TABLE RACE sidebar with live stacks and progress toward all 4000 chips,
+- eliminated players are visibly marked,
+- table/session number and ALIVE count are in the header,
+- the existing recent-win history remains,
+- normal hand wins still show the big popup,
+- the final survivor gets an even larger `TABLE WINNER` popup,
+- table-winner popup remains longer in non-FAST mode.

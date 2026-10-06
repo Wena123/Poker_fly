@@ -360,7 +360,7 @@ class PokerAnatomicalMonitor:
             shown = action if len(action) <= 18 else action[:17] + "..."
             self._label(canvas, f"F{i+1}: {shown}", ax, ay, 0.29, 1, (190, 195, 204))
 
-    def _status_panel(self, canvas, rect, fly_idx, acts, out, fitness, state, policy_probs=None):
+    def _status_panel(self, canvas, rect, fly_idx, acts, out, fitness, state, policy_probs=None, agent_name=None):
         x, y, w, h = rect
         self._panel(canvas, x, y, w, h, title="STATUS / PERFORMANCE")
         probs = np.asarray(policy_probs, dtype=np.float32) if policy_probs is not None else self._softmax(out, state.get("legal_actions"))
@@ -371,7 +371,7 @@ class PokerAnatomicalMonitor:
         if state.get("all_in"):
             decision = "ALL-IN / WAIT"
         lines = [
-            f"fly: {fly_idx+1}",
+            f"agent: {agent_name or ('FLY ' + str(fly_idx+1))}",
             f"fitness: {fitness:+.2f} bb/100",
             f"active units: {int(np.count_nonzero(np.abs(acts) >= .15))}/{len(acts)}",
             f"mean/peak: {mean:.3f} / {peak:.3f}",
@@ -441,15 +441,18 @@ class PokerAnatomicalMonitor:
         except Exception:
             policy_probs = None
 
-        self._label(canvas, f"FLY {fly_idx+1} | ANATOMICAL ACTIVITY 2.0", 12, 24, 0.66, 2)
+        agent_name = getattr(brain, "display_name", f"FLY {fly_idx+1}")
+        is_bot = bool(getattr(brain, "is_rule_bot", False))
+        title = f"{agent_name} | " + ("RULE BOT" if is_bot else "ANATOMICAL ACTIVITY 2.0")
+        subtitle = (
+            "fixed poker baseline | no mutation | no hidden cards"
+            if is_bot else
+            "FlyIsaac density/glow renderer | fixed XZ anatomy reference | live poker MLP activity"
+        )
+        self._label(canvas, title, 12, 24, 0.66, 2)
         self._label(
-            canvas,
-            "FlyIsaac density/glow renderer | fixed XZ anatomy reference | live poker MLP activity",
-            12,
-            44,
-            0.33,
-            1,
-            (172, 178, 188),
+            canvas, subtitle,
+            12, 44, 0.33, 1, (172, 178, 188),
         )
 
         # No fake 7x14 panel and no activity-over-time raster. The space goes to
@@ -480,7 +483,7 @@ class PokerAnatomicalMonitor:
         decoder_rect = (right_x, decoder_y, right_w, decoder_h)
 
         self._poker_input_panel(canvas, input_rect, state)
-        self._status_panel(canvas, status_rect, fly_idx, acts, out, fitness, state, policy_probs=policy_probs)
+        self._status_panel(canvas, status_rect, fly_idx, acts, out, fitness, state, policy_probs=policy_probs, agent_name=agent_name)
         self._decoder_panel(canvas, decoder_rect, out, state, policy_probs=policy_probs)
         return canvas
 

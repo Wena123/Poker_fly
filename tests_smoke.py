@@ -20,6 +20,7 @@ def main():
     for _ in range(100):
         result = env.play_hand(bots)
         assert sum(result["profits"]) == 0
+        assert sum(s.stack for s in env.seats) == cfg.starting_stack * 4
         all_cards = []
         for s in env.seats:
             all_cards.extend(s.hole)
