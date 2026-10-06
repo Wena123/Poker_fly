@@ -9,6 +9,10 @@ class Config:
     # Safety guard only; normal no-limit betting is stack-limited.
     max_actions_per_street: int = 600
 
+    # Fitness shaping: only a REAL bust (finishing the hand with stack == 0)
+    # is penalized. Choosing ALL-IN by itself is never penalized.
+    bust_penalty_bb: float = 5.0
+
     # Ewolucja
     population: int = 4
     hands_per_generation: int = 1500

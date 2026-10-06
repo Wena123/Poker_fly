@@ -360,10 +360,10 @@ class PokerAnatomicalMonitor:
             shown = action if len(action) <= 18 else action[:17] + "..."
             self._label(canvas, f"F{i+1}: {shown}", ax, ay, 0.29, 1, (190, 195, 204))
 
-    def _status_panel(self, canvas, rect, fly_idx, acts, out, fitness, state):
+    def _status_panel(self, canvas, rect, fly_idx, acts, out, fitness, state, policy_probs=None):
         x, y, w, h = rect
         self._panel(canvas, x, y, w, h, title="STATUS / PERFORMANCE")
-        probs = self._softmax(out, state.get("legal_actions"))
+        probs = np.asarray(policy_probs, dtype=np.float32) if policy_probs is not None else self._softmax(out, state.get("legal_actions"))
         choice = int(np.argmax(probs)) if np.any(probs) else -1
         peak = float(np.max(np.abs(acts))) if len(acts) else 0.0
         mean = float(np.mean(np.abs(acts))) if len(acts) else 0.0
@@ -382,11 +382,11 @@ class PokerAnatomicalMonitor:
             self._label(canvas, line, x + 8, yy, 0.34, 1)
             yy += 17
 
-    def _decoder_panel(self, canvas, rect, out, state):
+    def _decoder_panel(self, canvas, rect, out, state, policy_probs=None):
         x, y, w, h = rect
-        self._panel(canvas, x, y, w, h, title="POKER DECODER - 14 ACTIONS")
+        self._panel(canvas, x, y, w, h, title="POKER DECODER - ACTION -> SIZE")
         legal = set(int(a) for a in state.get("legal_actions", []))
-        probs = self._softmax(out, legal)
+        probs = np.asarray(policy_probs, dtype=np.float32) if policy_probs is not None else self._softmax(out, legal)
         choice = int(np.argmax(probs)) if np.any(probs) else -1
 
         # Two columns x seven actions keeps all bet sizes visible without
@@ -434,6 +434,12 @@ class PokerAnatomicalMonitor:
         out = np.asarray(dbg.get("output", []), dtype=np.float32)
         acts = np.concatenate([h1, h2]) if h1.size or h2.size else np.zeros(1, dtype=np.float32)
         state = self._state_for_fly(fly_idx, snapshot)
+        policy_probs = None
+        try:
+            if hasattr(brain, "decision_probabilities"):
+                policy_probs = brain.decision_probabilities(obs, state.get("legal_actions", []))
+        except Exception:
+            policy_probs = None
 
         self._label(canvas, f"FLY {fly_idx+1} | ANATOMICAL ACTIVITY 2.0", 12, 24, 0.66, 2)
         self._label(
@@ -474,8 +480,8 @@ class PokerAnatomicalMonitor:
         decoder_rect = (right_x, decoder_y, right_w, decoder_h)
 
         self._poker_input_panel(canvas, input_rect, state)
-        self._status_panel(canvas, status_rect, fly_idx, acts, out, fitness, state)
-        self._decoder_panel(canvas, decoder_rect, out, state)
+        self._status_panel(canvas, status_rect, fly_idx, acts, out, fitness, state, policy_probs=policy_probs)
+        self._decoder_panel(canvas, decoder_rect, out, state, policy_probs=policy_probs)
         return canvas
 
     def render(self, brains, observations, fitness=None, generation=0, hand=0, snapshot=None):

@@ -392,3 +392,37 @@ Changes:
 - cleaner footer speed controls.
 
 The separate OpenCV Anatomical Activity Monitor is unchanged.
+
+## V12 — anti all-in spam / hierarchical decisions / bust penalty
+
+V12 changes the temporary MLP policy from one flat 14-way choice to two stages:
+
+1. **ACTION HEAD** — `FOLD`, `CHECK`, `CALL`, `BET/RAISE`
+2. **SIZING HEAD** — consulted only after `BET/RAISE` wins:
+   `MIN`, `1/4 POT`, `1/3 POT`, `1/2 POT`, `2/3 POT`, `3/4 POT`,
+   `POT`, `1.25x POT`, `1.5x POT`, `2x POT`, `ALL-IN`
+
+The environment still exposes the same 14 final actions. This prevents `ALL-IN`
+from directly competing as a peer with `CHECK`/`CALL` in one flat argmax.
+
+Sizing deduplication remains active: if a nominal sizing would require all of the
+remaining stack, that sizing is masked and only the explicit `ALL-IN` action is
+kept. Multiple buttons therefore cannot secretly resolve to the same shove.
+
+### Bust penalty
+
+`Config.bust_penalty_bb = 5.0` by default.
+
+A fly is penalized only when it **finishes a hand with stack == 0**. Merely
+choosing `ALL-IN` is not penalized. Raw chip profit is still tracked separately.
+
+Fitness is:
+
+`raw BB/100 - bust penalty BB/100`
+
+With the default setting, one bust per 100 hands subtracts `5 BB/100` from
+fitness. Console output shows both raw BB/100 and bust rate, and Pygame shows the
+current penalized fitness plus bust percentages.
+
+Old V10/V11 flat-head checkpoints can still be loaded; their old 14-output head
+is converted into the new action/sizing heads as a compatibility approximation.

@@ -576,8 +576,11 @@ class PokerEnv:
         profits = [s.stack - self.cfg.starting_stack for s in self.seats]
         assert sum(profits) == 0, profits
 
+        busted = [bool(s.stack == 0) for s in self.seats]
+
         return {
             "profits": profits,
+            "busted": busted,
             "winners": winners,
             "board": [card_to_str(c) for c in self.board],
             "button": self.button,

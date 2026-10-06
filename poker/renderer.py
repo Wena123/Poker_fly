@@ -43,6 +43,7 @@ class PygameRenderer:
         self.generation = 0
         self.hand_index = 0
         self.fitness = None
+        self.bust_rate = None
         self.assets = self._load_cards()
         self.card_size = (90, 130)
 
@@ -72,10 +73,11 @@ class PygameRenderer:
                 pass
         return assets
 
-    def set_meta(self, generation, hand_index, fitness=None):
+    def set_meta(self, generation, hand_index, fitness=None, bust_rate=None):
         self.generation = generation
         self.hand_index = hand_index
         self.fitness = fitness
+        self.bust_rate = bust_rate
 
     def _txt(self, text, x, y, *, big=False, hero=False, small=False, tiny=False, micro=False,
              color=(235, 235, 235), center=False):
@@ -474,20 +476,29 @@ class PygameRenderer:
             else:
                 self._empty_card(x, board_y)
 
-        # Fitness panel on lower felt.
+        # Fitness panel on lower felt. Fitness already includes the bust penalty.
         if self.fitness is not None:
-            fit = pg.Rect(table.centerx - 238, table.bottom - 88, 476, 58)
+            fit = pg.Rect(table.centerx - 252, table.bottom - 98, 504, 74)
             pg.draw.rect(self.draw, (11, 44, 33), fit, border_radius=13)
             pg.draw.rect(self.draw, (55, 102, 79), fit, 1, border_radius=13)
-            self._txt("FITNESS  BB/100", fit.x + 14, fit.y + 8, micro=True, color=(124, 158, 140))
+            self._txt("FITNESS  BB/100  •  BUST PENALTY INCLUDED", fit.x + 14, fit.y + 7, micro=True, color=(124, 158, 140))
             self._txt(
                 "    ".join(f"F{i+1} {v:+.1f}" for i, v in enumerate(self.fitness)),
                 fit.centerx,
-                fit.y + 37,
+                fit.y + 34,
                 tiny=True,
                 color=(206, 220, 211),
                 center=True,
             )
+            if self.bust_rate is not None:
+                self._txt(
+                    "BUST  " + "    ".join(f"F{i+1} {v:.1f}%" for i, v in enumerate(self.bust_rate)),
+                    fit.centerx,
+                    fit.y + 55,
+                    micro=True,
+                    color=(173, 183, 176),
+                    center=True,
+                )
 
         sb = (snap["button"] + 1) % 4
         bb = (snap["button"] + 2) % 4
