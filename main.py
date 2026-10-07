@@ -4,11 +4,11 @@ from pathlib import Path
 from config import Config
 from agent.trainer import Trainer
 from agent.watcher import Watcher
-from agent.checkpoints import latest_checkpoint
+from agent.checkpoints import latest_checkpoint, default_checkpoint_dir
 
 
-def _resolve_latest():
-    return latest_checkpoint("checkpoints")
+def _resolve_latest(checkpoint_dir=None):
+    return latest_checkpoint(checkpoint_dir)
 
 
 def main():
@@ -27,7 +27,17 @@ def main():
     parser.add_argument("--generations", type=int, default=None, help="Ile nowych generacji wytrenować.")
     parser.add_argument("--hands", type=int, default=None, help="Minimalna liczba rąk. Rozpoczęty stół zawsze jest dogrywany aż zostanie 1 gracz.")
     parser.add_argument("--render-every", type=int, default=None, help="W treningu pokazuj co N-te rozdanie. Watch-train domyślnie pokazuje każde.")
+    parser.add_argument("--checkpoint-dir", type=str, default=None, help="Opcjonalny folder checkpointów. Domyślnie: <folder projektu>/checkpoints.")
+    parser.add_argument("--unity", action="store_true", help="Wysyłaj prawdziwy stan gry do lokalnego Unity na 127.0.0.1:8765.")
     args = parser.parse_args()
+
+    checkpoint_dir = (
+        Path(args.checkpoint_dir).expanduser().resolve()
+        if args.checkpoint_dir
+        else default_checkpoint_dir().resolve()
+    )
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    print(f"CHECKPOINT DIRECTORY -> {checkpoint_dir}", flush=True)
 
     cfg = Config()
     if args.hands is not None and not (args.watch or args.watch_latest):
@@ -41,22 +51,28 @@ def main():
     if args.watch:
         watch_path = Path(args.watch)
     elif args.watch_latest:
-        watch_path = _resolve_latest()
+        watch_path = _resolve_latest(checkpoint_dir)
     elif args.watch_train:
         resume_path = Path(args.watch_train)
         force_render = True
     elif args.watch_train_latest:
-        resume_path = _resolve_latest()
+        resume_path = _resolve_latest(checkpoint_dir)
         force_render = True
     elif args.resume:
         resume_path = Path(args.resume)
     elif args.resume_latest:
-        resume_path = _resolve_latest()
+        resume_path = _resolve_latest(checkpoint_dir)
 
     if watch_path is not None and not watch_path.exists():
         parser.error(f"Checkpoint does not exist: {watch_path}")
     if resume_path is not None and not resume_path.exists():
         parser.error(f"Checkpoint does not exist: {resume_path}")
+
+    unity_bridge = None
+    if args.unity:
+        from viewer.unity_bridge import UnityBridge
+        unity_bridge = UnityBridge()
+        print("UNITY BRIDGE -> 127.0.0.1:8765", flush=True)
 
     renderer = None
     needs_render = bool(args.render or force_render or watch_path is not None)
@@ -76,6 +92,7 @@ def main():
                 checkpoint=watch_path,
                 renderer=renderer,
                 with_bot=args.with_bot,
+                unity_bridge=unity_bridge,
             )
             result = watcher.run(hands=hands)
             print(
@@ -102,8 +119,10 @@ def main():
             cfg,
             renderer=renderer,
             render_every=render_every,
+            out_dir=checkpoint_dir,
             resume_path=resume_path,
             with_bot=args.with_bot,
+            unity_bridge=unity_bridge,
         )
         trainer.run(generations=args.generations)
 
@@ -112,6 +131,8 @@ def main():
     finally:
         if renderer is not None:
             renderer.close()
+        if unity_bridge is not None:
+            unity_bridge.close()
 
 
 if __name__ == "__main__":

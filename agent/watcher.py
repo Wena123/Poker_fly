@@ -10,10 +10,11 @@ from .checkpoints import checkpoint_generation
 class Watcher:
     """Watch complete persistent-stack table sessions without learning."""
 
-    def __init__(self, config, checkpoint, renderer=None, with_bot=False):
+    def __init__(self, config, checkpoint, renderer=None, with_bot=False, unity_bridge=None):
         self.cfg = config
         self.renderer = renderer
         self.with_bot = bool(with_bot)
+        self.unity_bridge = unity_bridge
         self.checkpoint = Path(checkpoint)
         self.brain = SimpleFlyBrain.load(self.checkpoint)
 
@@ -64,6 +65,10 @@ class Watcher:
             while not env.session_over:
                 played += 1
 
+                callbacks = []
+                if self.unity_bridge is not None:
+                    callbacks.append(self.unity_bridge.on_snapshot)
+
                 if self.renderer is not None:
                     raw = (total_profit / self.cfg.big_blind) / max(1, played) * 100.0
                     # Rough display metric in watch mode.
@@ -76,7 +81,12 @@ class Watcher:
                         session_index=sessions,
                         table_wins=table_wins.tolist(),
                     )
-                    callback = lambda e, s, a: self.renderer.render(e, s, a)
+                    callbacks.append(lambda e, s, a: self.renderer.render(e, s, a))
+
+                if callbacks:
+                    def callback(e, snap, a, _callbacks=tuple(callbacks)):
+                        for cb in _callbacks:
+                            cb(e, snap, a)
                 else:
                     callback = None
 

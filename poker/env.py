@@ -649,6 +649,8 @@ class PokerEnv:
         if len(self._active()) > 1:
             self._new_street("flop")
             self._deal_board(3)
+            if callback is not None:
+                callback(self, self.snapshot(reveal_all=True), agents)
             first = self._next_in_set(self.button, self._actionable())
             if first is not None:
                 self._betting_round(agents, first_to_act=first, callback=callback)
@@ -656,6 +658,8 @@ class PokerEnv:
         if len(self._active()) > 1:
             self._new_street("turn")
             self._deal_board(1)
+            if callback is not None:
+                callback(self, self.snapshot(reveal_all=True), agents)
             first = self._next_in_set(self.button, self._actionable())
             if first is not None:
                 self._betting_round(agents, first_to_act=first, callback=callback)
@@ -663,6 +667,8 @@ class PokerEnv:
         if len(self._active()) > 1:
             self._new_street("river")
             self._deal_board(1)
+            if callback is not None:
+                callback(self, self.snapshot(reveal_all=True), agents)
             first = self._next_in_set(self.button, self._actionable())
             if first is not None:
                 self._betting_round(agents, first_to_act=first, callback=callback)
