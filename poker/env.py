@@ -477,7 +477,7 @@ class PokerEnv:
     # ------------------------------------------------------------------
     # Betting / streets
     # ------------------------------------------------------------------
-    def _betting_round(self, agents, first_to_act, callback=None):
+    def _betting_round(self, agents, first_to_act, callback=None, event_handler=None):
         pending = set(self._actionable())
         if not pending:
             return
@@ -511,12 +511,29 @@ class PokerEnv:
                 actor = self._next_in_set(actor, pending)
                 continue
 
+            if event_handler is not None:
+                hook = getattr(event_handler, "before_action", None)
+                if hook is not None:
+                    hook(self, actor, agents)
+
             obs = self.observation(actor)
             action = int(agents[actor].act(obs, legal))
             if action not in legal:
                 action = CALL if CALL in legal else CHECK if CHECK in legal else legal[0]
 
             raised = self._execute_action(actor, action)
+
+            if event_handler is not None:
+                hook = getattr(event_handler, "after_action", None)
+                if hook is not None:
+                    hook(
+                        self,
+                        actor,
+                        action,
+                        int(self.seats[actor].last_amount),
+                        agents,
+                    )
+
             pending.discard(actor)
 
             if raised:
@@ -620,7 +637,7 @@ class PokerEnv:
     # ------------------------------------------------------------------
     # Full hand
     # ------------------------------------------------------------------
-    def play_hand(self, agents, callback=None):
+    def play_hand(self, agents, callback=None, event_handler=None):
         if len(agents) != 4:
             raise ValueError("Potrzeba dokładnie 4 agentów/seats.")
 
@@ -631,6 +648,11 @@ class PokerEnv:
         hand_start_stacks = [int(s.stack) for s in self.seats]
         self._prepare_hand()
         sb, bb = self._post_blinds()
+
+        if event_handler is not None:
+            hook = getattr(event_handler, "on_new_hand", None)
+            if hook is not None:
+                hook(self, agents)
 
         if callback is not None:
             callback(self, self.snapshot(reveal_all=True), agents)
@@ -644,34 +666,28 @@ class PokerEnv:
             first_preflop = self._next_in_set(bb, self._actionable())
 
         if first_preflop is not None:
-            self._betting_round(agents, first_to_act=first_preflop, callback=callback)
+            self._betting_round(agents, first_to_act=first_preflop, callback=callback, event_handler=event_handler)
 
         if len(self._active()) > 1:
             self._new_street("flop")
             self._deal_board(3)
-            if callback is not None:
-                callback(self, self.snapshot(reveal_all=True), agents)
             first = self._next_in_set(self.button, self._actionable())
             if first is not None:
-                self._betting_round(agents, first_to_act=first, callback=callback)
+                self._betting_round(agents, first_to_act=first, callback=callback, event_handler=event_handler)
 
         if len(self._active()) > 1:
             self._new_street("turn")
             self._deal_board(1)
-            if callback is not None:
-                callback(self, self.snapshot(reveal_all=True), agents)
             first = self._next_in_set(self.button, self._actionable())
             if first is not None:
-                self._betting_round(agents, first_to_act=first, callback=callback)
+                self._betting_round(agents, first_to_act=first, callback=callback, event_handler=event_handler)
 
         if len(self._active()) > 1:
             self._new_street("river")
             self._deal_board(1)
-            if callback is not None:
-                callback(self, self.snapshot(reveal_all=True), agents)
             first = self._next_in_set(self.button, self._actionable())
             if first is not None:
-                self._betting_round(agents, first_to_act=first, callback=callback)
+                self._betting_round(agents, first_to_act=first, callback=callback, event_handler=event_handler)
 
         self.current_actor = None
         winners = self._award()
@@ -708,6 +724,11 @@ class PokerEnv:
             assert self.seats[winner].stack == self.table_chips, [
                 s.stack for s in self.seats
             ]
+
+        if event_handler is not None:
+            hook = getattr(event_handler, "on_hand_end", None)
+            if hook is not None:
+                hook(self, agents, winners)
 
         if callback is not None:
             callback(self, self.snapshot(reveal_all=True), agents)

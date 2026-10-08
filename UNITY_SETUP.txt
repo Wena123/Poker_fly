@@ -1,0 +1,77 @@
+FLYPOKER V17 - UNITY ANIMATION HANDSHAKE
+========================================
+
+CO JEST NOWE
+------------
+Python zatrzymuje pętlę pokera na czas animacji Unity.
+
+Dla każdego ruchu:
+1. Python wysyła THINK.
+2. Czeka na {"type":"animation_done","seat":N}.
+3. Mózg wybiera akcję.
+4. Python wysyła CALL / RAISE / itd.
+5. Czeka na animation_done.
+6. Dopiero wtedy następny gracz może wykonać ruch.
+
+Aktualne mapowanie:
+THINK  -> Fly_Think
+CALL   -> Fly_Call
+RAISE i wszystkie sizingi -> Fly_Raise
+ALL-IN -> Fly_Raise
+CHECK/FOLD -> brak klipu na razie, Unity od razu odsyła DONE
+IDLE -> stan domyślny
+
+UNITY
+-----
+1. Najpierw uruchom Play w Unity.
+2. PokerReceiver musi nasłuchiwać na 127.0.0.1:8765.
+3. Flies[0..3] w PokerReceiver muszą wskazywać Fly1..Fly4.
+4. Każda mucha musi mieć Animator + FlyAnimationController.
+5. Fly_Think, Fly_Call i Fly_Raise muszą mieć Animation Event
+   AnimationFinished() na końcu klipu.
+6. Fly_Idle ma Loop Time ON i NIE ma AnimationFinished().
+
+PYTHON
+------
+Przykład treningu z Unity:
+
+python main.py --unity --generations 100 --hands 5000
+
+Windows, jeśli używasz py:
+
+py main.py --unity --generations 100 --hands 5000
+
+Z Pygame równocześnie:
+
+python main.py --unity --render --render-every 1 --generations 100 --hands 5000
+
+Resume:
+
+python main.py --unity --resume-latest --generations 100 --hands 5000
+
+Inny host/port:
+
+python main.py --unity --unity-host 127.0.0.1 --unity-port 8765
+
+Timeout na zepsutą/brakującą animację:
+
+python main.py --unity --unity-timeout 60
+
+PROTOKÓŁ
+--------
+Python -> Unity:
+{"type":"animation","seat":0,"action":"THINK","amount":0}
+{"type":"animation","seat":0,"action":"RAISE","amount":150}
+
+Unity -> Python po AnimationFinished():
+{"type":"animation_done","seat":0}
+
+Python wysyła też stan stołu w JSON:
+new_hand, hole_cards, stack, bet, board, pot, turn, action, hand_end.
+
+TEST SAMEGO BRIDGE'A BEZ UNITY
+------------------------------
+python test_unity_bridge.py
+
+Oczekiwany wynik:
+UNITY BRIDGE HANDSHAKE TEST: OK

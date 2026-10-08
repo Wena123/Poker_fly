@@ -642,49 +642,14 @@ Pygame V16:
 - the final survivor gets an even larger `TABLE WINNER` popup,
 - table-winner popup remains longer in non-FAST mode.
 
+---
 
-## V17 — checkpoint path/save fix
+## V17: Unity animation handshake
 
-- Checkpoints no longer depend on the terminal current working directory.
-- Default save folder is always `<project root>/checkpoints`.
-- `watch-train`, normal training and resumed training all use the same absolute checkpoint folder.
-- Every completed generation prints `CHECKPOINT SAVED -> /absolute/path/...`.
-- Checkpoint writes are atomic and verified.
-- `checkpoints/LATEST.txt` is updated after every successful generation save.
-- Added optional `--checkpoint-dir PATH` for an explicit custom destination.
-- `--resume-latest`, `--watch-latest`, and `--watch-train-latest` all search the same resolved checkpoint directory.
-
-## V18: Unity live bridge
-
-V18 can stream the real PokerEnv state to a local Unity viewer. Unity does not
-shuffle or simulate poker; it only visualizes the same cards produced by the
-Python engine/Pygame.
-
-Start Unity Play Mode first, with `PokerReceiver` listening on `127.0.0.1:8765`,
-then add `--unity` to any training/watch command, for example:
+Run Unity in Play Mode first, then start Python with `--unity`:
 
 ```bash
-python main.py --watch-train-latest --with-bot --unity --generations 100 --hands 5000
+python main.py --unity --generations 100 --hands 5000
 ```
 
-or Pygame + Unity together:
-
-```bash
-python main.py --resume-latest --with-bot --render --unity --render-every 1 --generations 100 --hands 5000
-```
-
-The bridge currently emits `new_hand`, `hole_cards` for seats 0..3 and `board`
-for flop/turn/river. A `new_hand` event clears the previous hole cards and board
-in the Unity `CardManager`.
-
-## V19 - Unity chips
-
-`--unity` now also streams chip state from the real PokerEnv snapshot:
-
-- `stack`: each seat's persistent table stack
-- `bet`: each seat's current-street contribution
-- `pot`: chips already settled in the centre (previous streets)
-
-At showdown, Unity receives zero current bets / pot together with updated player stacks. This is intentionally an instant payout for now; movement animation can be added later.
-
-Unity helper scripts are included in `unity_scripts/ChipManager.cs` and `unity_scripts/PokerReceiver.cs`.
+Python now blocks the poker loop for `THINK` and the selected action until Unity replies with `{"type":"animation_done","seat":N}`.  See `UNITY_SETUP.txt` for the exact Unity setup and protocol.

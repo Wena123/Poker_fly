@@ -5,7 +5,7 @@ from poker.env import PokerEnv, ACTION_COUNT
 from .simple_brain import SimpleFlyBrain
 from .strong_bot import StrongPokerBot
 from .evolution import Evolution
-from .checkpoints import checkpoint_generation, default_checkpoint_dir, save_checkpoint_atomic
+from .checkpoints import checkpoint_generation
 
 
 class Trainer:
@@ -14,7 +14,7 @@ class Trainer:
         config,
         renderer=None,
         render_every=100,
-        out_dir=None,
+        out_dir="checkpoints",
         resume_path=None,
         with_bot=False,
         unity_bridge=None,
@@ -22,14 +22,10 @@ class Trainer:
         self.cfg = config
         self.renderer = renderer
         self.render_every = max(1, int(render_every))
-        if out_dir is None:
-            self.out_dir = default_checkpoint_dir()
-        else:
-            self.out_dir = Path(out_dir).expanduser().resolve()
-            self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.out_dir = Path(out_dir)
+        self.out_dir.mkdir(parents=True, exist_ok=True)
         self.with_bot = bool(with_bot)
         self.unity_bridge = unity_bridge
-        print(f"CHECKPOINT DIRECTORY -> {self.out_dir.resolve()}", flush=True)
 
         probe = PokerEnv(config, seed=config.seed)
         self.obs_size = probe.observation_size
@@ -199,10 +195,7 @@ class Trainer:
                     )
                 )
 
-                callbacks = []
-                if self.unity_bridge is not None:
-                    callbacks.append(self.unity_bridge.on_snapshot)
-
+                callback = None
                 if render_this:
                     current_fit, _, current_bust_rate, _ = self._fitness_metrics(
                         total_profit,
@@ -229,16 +222,9 @@ class Trainer:
                         session_index=session_idx,
                         table_wins=seat_wins,
                     )
-                    callbacks.append(lambda e, s, a: self.renderer.render(e, s, a))
+                    callback = lambda e, s, a: self.renderer.render(e, s, a)
 
-                if callbacks:
-                    def callback(e, snap, a, _callbacks=tuple(callbacks)):
-                        for cb in _callbacks:
-                            cb(e, snap, a)
-                else:
-                    callback = None
-
-                result = env.play_hand(agents, callback=callback)
+                result = env.play_hand(agents, callback=callback, event_handler=self.unity_bridge)
                 profits = np.asarray(result["profits"], dtype=np.float64)
                 busted = np.asarray(result.get("busted", [False] * 4), dtype=np.int64)
 
@@ -315,8 +301,7 @@ class Trainer:
             )
 
             checkpoint = self.out_dir / f"best_brain_gen_{gen:04d}.npz"
-            checkpoint = save_checkpoint_atomic(champion, checkpoint)
-            print(f"CHECKPOINT SAVED -> {checkpoint}", flush=True)
+            champion.save(checkpoint)
 
             row = {
                 "generation": gen,

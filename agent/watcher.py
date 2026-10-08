@@ -65,10 +65,6 @@ class Watcher:
             while not env.session_over:
                 played += 1
 
-                callbacks = []
-                if self.unity_bridge is not None:
-                    callbacks.append(self.unity_bridge.on_snapshot)
-
                 if self.renderer is not None:
                     raw = (total_profit / self.cfg.big_blind) / max(1, played) * 100.0
                     # Rough display metric in watch mode.
@@ -81,16 +77,11 @@ class Watcher:
                         session_index=sessions,
                         table_wins=table_wins.tolist(),
                     )
-                    callbacks.append(lambda e, s, a: self.renderer.render(e, s, a))
-
-                if callbacks:
-                    def callback(e, snap, a, _callbacks=tuple(callbacks)):
-                        for cb in _callbacks:
-                            cb(e, snap, a)
+                    callback = lambda e, s, a: self.renderer.render(e, s, a)
                 else:
                     callback = None
 
-                result = env.play_hand(agents, callback=callback)
+                result = env.play_hand(agents, callback=callback, event_handler=self.unity_bridge)
                 total_profit += np.asarray(result["profits"], dtype=np.float64)
                 busts += np.asarray(result.get("busted", [False] * 4), dtype=np.int64)
 

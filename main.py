@@ -4,11 +4,11 @@ from pathlib import Path
 from config import Config
 from agent.trainer import Trainer
 from agent.watcher import Watcher
-from agent.checkpoints import latest_checkpoint, default_checkpoint_dir
+from agent.checkpoints import latest_checkpoint
 
 
-def _resolve_latest(checkpoint_dir=None):
-    return latest_checkpoint(checkpoint_dir)
+def _resolve_latest():
+    return latest_checkpoint("checkpoints")
 
 
 def main():
@@ -23,21 +23,15 @@ def main():
     mode.add_argument("--watch-train-latest", action="store_true", help="Kontynuuj najnowszy checkpoint z podglądem na żywo.")
 
     parser.add_argument("--render", action="store_true", help="Włącz Pygame + monitor podczas zwykłego treningu.")
+    parser.add_argument("--unity", action="store_true", help="Połącz z Unity i czekaj na zakończenie każdej animacji przed kolejnym ruchem.")
+    parser.add_argument("--unity-host", type=str, default="127.0.0.1", help="Adres hosta Unity PokerReceiver.")
+    parser.add_argument("--unity-port", type=int, default=8765, help="Port Unity PokerReceiver.")
+    parser.add_argument("--unity-timeout", type=float, default=60.0, help="Maksymalny czas oczekiwania na animation_done w sekundach.")
     parser.add_argument("--with-bot", "--bot", dest="with_bot", action="store_true", help="Dodaj stałego StrongPokerBot jako przeciwnika.")
     parser.add_argument("--generations", type=int, default=None, help="Ile nowych generacji wytrenować.")
     parser.add_argument("--hands", type=int, default=None, help="Minimalna liczba rąk. Rozpoczęty stół zawsze jest dogrywany aż zostanie 1 gracz.")
     parser.add_argument("--render-every", type=int, default=None, help="W treningu pokazuj co N-te rozdanie. Watch-train domyślnie pokazuje każde.")
-    parser.add_argument("--checkpoint-dir", type=str, default=None, help="Opcjonalny folder checkpointów. Domyślnie: <folder projektu>/checkpoints.")
-    parser.add_argument("--unity", action="store_true", help="Wysyłaj prawdziwy stan gry do lokalnego Unity na 127.0.0.1:8765.")
     args = parser.parse_args()
-
-    checkpoint_dir = (
-        Path(args.checkpoint_dir).expanduser().resolve()
-        if args.checkpoint_dir
-        else default_checkpoint_dir().resolve()
-    )
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    print(f"CHECKPOINT DIRECTORY -> {checkpoint_dir}", flush=True)
 
     cfg = Config()
     if args.hands is not None and not (args.watch or args.watch_latest):
@@ -51,34 +45,39 @@ def main():
     if args.watch:
         watch_path = Path(args.watch)
     elif args.watch_latest:
-        watch_path = _resolve_latest(checkpoint_dir)
+        watch_path = _resolve_latest()
     elif args.watch_train:
         resume_path = Path(args.watch_train)
         force_render = True
     elif args.watch_train_latest:
-        resume_path = _resolve_latest(checkpoint_dir)
+        resume_path = _resolve_latest()
         force_render = True
     elif args.resume:
         resume_path = Path(args.resume)
     elif args.resume_latest:
-        resume_path = _resolve_latest(checkpoint_dir)
+        resume_path = _resolve_latest()
 
     if watch_path is not None and not watch_path.exists():
         parser.error(f"Checkpoint does not exist: {watch_path}")
     if resume_path is not None and not resume_path.exists():
         parser.error(f"Checkpoint does not exist: {resume_path}")
 
-    unity_bridge = None
-    if args.unity:
-        from viewer.unity_bridge import UnityBridge
-        unity_bridge = UnityBridge()
-        print("UNITY BRIDGE -> 127.0.0.1:8765", flush=True)
-
     renderer = None
     needs_render = bool(args.render or force_render or watch_path is not None)
     if needs_render:
         from poker.renderer import PygameRenderer
         renderer = PygameRenderer()
+
+    unity_bridge = None
+    if args.unity:
+        from unity_bridge import UnityBridge
+        unity_bridge = UnityBridge(
+            host=args.unity_host,
+            port=args.unity_port,
+            timeout=max(1.0, float(args.unity_timeout)),
+            verbose=True,
+        )
+        unity_bridge.connect()
 
     try:
         if watch_path is not None:
@@ -119,7 +118,6 @@ def main():
             cfg,
             renderer=renderer,
             render_every=render_every,
-            out_dir=checkpoint_dir,
             resume_path=resume_path,
             with_bot=args.with_bot,
             unity_bridge=unity_bridge,
@@ -129,10 +127,10 @@ def main():
     except KeyboardInterrupt:
         print("\nStopped by user.")
     finally:
-        if renderer is not None:
-            renderer.close()
         if unity_bridge is not None:
             unity_bridge.close()
+        if renderer is not None:
+            renderer.close()
 
 
 if __name__ == "__main__":
