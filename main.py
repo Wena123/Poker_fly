@@ -78,6 +78,8 @@ def main():
             verbose=True,
         )
         unity_bridge.connect()
+        if renderer is not None:
+            unity_bridge.set_wait_pump(renderer.pump_waiting)
 
     try:
         if watch_path is not None:

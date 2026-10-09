@@ -549,6 +549,14 @@ class PokerEnv:
             if actor is None:
                 return
 
+    def _notify_betting_round_end(self, event_handler, agents):
+        if event_handler is None:
+            return
+
+        hook = getattr(event_handler, "on_betting_round_end", None)
+        if hook is not None:
+            hook(self, agents)
+
     def _new_street(self, street):
         self.street = street
         self.current_bet = 0
@@ -668,12 +676,17 @@ class PokerEnv:
         if first_preflop is not None:
             self._betting_round(agents, first_to_act=first_preflop, callback=callback, event_handler=event_handler)
 
+        # Move the current street's BetAnchor visuals into PotAnchor before
+        # either dealing the next street or paying the hand winner.
+        self._notify_betting_round_end(event_handler, agents)
+
         if len(self._active()) > 1:
             self._new_street("flop")
             self._deal_board(3)
             first = self._next_in_set(self.button, self._actionable())
             if first is not None:
                 self._betting_round(agents, first_to_act=first, callback=callback, event_handler=event_handler)
+            self._notify_betting_round_end(event_handler, agents)
 
         if len(self._active()) > 1:
             self._new_street("turn")
@@ -681,6 +694,7 @@ class PokerEnv:
             first = self._next_in_set(self.button, self._actionable())
             if first is not None:
                 self._betting_round(agents, first_to_act=first, callback=callback, event_handler=event_handler)
+            self._notify_betting_round_end(event_handler, agents)
 
         if len(self._active()) > 1:
             self._new_street("river")
@@ -688,6 +702,7 @@ class PokerEnv:
             first = self._next_in_set(self.button, self._actionable())
             if first is not None:
                 self._betting_round(agents, first_to_act=first, callback=callback, event_handler=event_handler)
+            self._notify_betting_round_end(event_handler, agents)
 
         self.current_actor = None
         winners = self._award()

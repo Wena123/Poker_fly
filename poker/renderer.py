@@ -956,6 +956,29 @@ class PygameRenderer:
                 end = time.perf_counter() + wait_ms / 1000.0
             self.pg.time.wait(min(10, max(1, int((end - time.perf_counter()) * 1000))))
 
+    def pump_waiting(self):
+        """Keep Pygame + OpenCV responsive while poker waits for Unity.
+
+        This must not advance the poker simulation. It only processes OS/UI
+        events and re-presents the last drawn frame.
+        """
+        self._events()
+        if self.closed:
+            return
+
+        try:
+            self._present()
+        except Exception:
+            pass
+
+        try:
+            self.monitor.pump_events()
+        except Exception:
+            pass
+
+        # Tiny sleep prevents a busy-spin while Unity animation is running.
+        self.pg.time.wait(1)
+
     def render(self, env, snap, agents):
         self._events()
         if self.closed:

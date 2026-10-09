@@ -1,17 +1,20 @@
-"""Blocking Unity bridge for FlyPoker.
+"""Unity bridge for FlyPoker with animation + chip-flow handshakes.
 
-Unity listens on TCP 127.0.0.1:8765 and receives one JSON object per line.
-For every poker action Python sends an ``animation`` message and blocks until
-Unity replies with ``animation_done`` for the same seat.  This guarantees that
-PokerEnv cannot advance to the next actor while the current fly animation is
-still playing.
+Protocol (one JSON object per line):
+- Python -> Unity: animation / state messages / collect_bets / award_pot
+- Unity -> Python: animation_done / chip_flow_done
+
+The bridge waits for Unity when an animation or chip-flow is running, but pumps
+Pygame/OpenCV while waiting so the debug windows stay responsive.
 """
 
 from __future__ import annotations
 
 import json
+import select
 import socket
-from typing import Any
+import time
+from typing import Any, Callable
 
 from poker.cards import card_to_str
 from poker.env import ACTION_NAMES
@@ -24,14 +27,17 @@ class UnityBridge:
         port: int = 8765,
         timeout: float = 60.0,
         verbose: bool = True,
+        poll_interval: float = 0.02,
     ):
         self.host = str(host)
         self.port = int(port)
         self.timeout = float(timeout)
         self.verbose = bool(verbose)
+        self.poll_interval = max(0.005, float(poll_interval))
 
         self.sock: socket.socket | None = None
-        self.reader = None
+        self._recv_buffer = bytearray()
+        self._wait_pump: Callable[[], None] | None = None
 
     # ------------------------------------------------------------------
     # Connection
@@ -39,6 +45,20 @@ class UnityBridge:
     @property
     def connected(self) -> bool:
         return self.sock is not None
+
+    def set_wait_pump(self, callback: Callable[[], None] | None) -> None:
+        self._wait_pump = callback
+
+    def _pump_wait_ui(self) -> None:
+        cb = self._wait_pump
+        if cb is None:
+            return
+        try:
+            cb()
+        except Exception as exc:
+            if self.verbose:
+                print(f"[UNITY] wait-pump warning: {exc}")
+            self._wait_pump = None
 
     def connect(self) -> None:
         if self.connected:
@@ -58,26 +78,23 @@ class UnityBridge:
                 "Start Unity Play mode first so PokerReceiver is listening."
             ) from exc
 
-        sock.settimeout(self.timeout)
+        sock.settimeout(None)
         self.sock = sock
-        self.reader = sock.makefile("r", encoding="utf-8", newline="\n")
+        self._recv_buffer.clear()
 
         if self.verbose:
             print("[UNITY] Connected.")
 
     def close(self) -> None:
-        reader = self.reader
         sock = self.sock
-        self.reader = None
         self.sock = None
-
-        if reader is not None:
-            try:
-                reader.close()
-            except OSError:
-                pass
+        self._recv_buffer.clear()
 
         if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
             try:
                 sock.close()
             except OSError:
@@ -100,23 +117,67 @@ class UnityBridge:
             self.close()
             raise ConnectionError("Unity disconnected while Python was sending data.") from exc
 
+    def _pop_buffered_line(self) -> str | None:
+        try:
+            idx = self._recv_buffer.index(10)
+        except ValueError:
+            return None
+
+        raw = bytes(self._recv_buffer[:idx])
+        del self._recv_buffer[: idx + 1]
+        return raw.rstrip(b"\r").decode("utf-8", errors="replace")
+
     def _read_message(self) -> dict[str, Any]:
-        if self.reader is None:
+        sock = self.sock
+        if sock is None:
             raise RuntimeError("UnityBridge is not connected.")
 
-        try:
-            line = self.reader.readline()
-        except (OSError, socket.timeout) as exc:
-            raise TimeoutError(
-                f"Unity did not answer within {self.timeout:g}s. "
-                "Check that AnimationFinished() exists at the end of the clip."
-            ) from exc
+        deadline = time.monotonic() + self.timeout
 
-        if line == "":
-            self.close()
-            raise ConnectionError("Unity disconnected while Python was waiting for a reply.")
+        while True:
+            buffered = self._pop_buffered_line()
+            if buffered is not None:
+                line = buffered.strip()
+                break
 
-        line = line.strip()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Unity did not answer within {self.timeout:g}s. "
+                    "Check Unity Console and the corresponding DONE event."
+                )
+
+            self._pump_wait_ui()
+
+            try:
+                readable, _, _ = select.select(
+                    [sock], [], [], min(self.poll_interval, remaining)
+                )
+            except (OSError, ValueError) as exc:
+                self.close()
+                raise ConnectionError(
+                    "Unity socket became invalid while Python was waiting."
+                ) from exc
+
+            if not readable:
+                continue
+
+            try:
+                chunk = sock.recv(4096)
+            except OSError as exc:
+                self.close()
+                raise ConnectionError(
+                    "Unity disconnected while Python was waiting for a reply."
+                ) from exc
+
+            if not chunk:
+                self.close()
+                raise ConnectionError(
+                    "Unity disconnected while Python was waiting for a reply."
+                )
+
+            self._recv_buffer.extend(chunk)
+
         if self.verbose:
             print(f"[UNITY -> PYTHON] {line}")
 
@@ -126,10 +187,27 @@ class UnityBridge:
         try:
             value = json.loads(line)
         except json.JSONDecodeError:
-            # Keep compatibility with tiny text replies such as PONG.
             return {"type": line}
 
         return value if isinstance(value, dict) else {"value": value}
+
+    def _wait_for(self, message_type: str, **expected_fields: Any) -> dict[str, Any]:
+        expected_type = str(message_type).strip().lower()
+
+        while True:
+            msg = self._read_message()
+            msg_type = str(msg.get("type", "")).strip().lower()
+            if msg_type != expected_type:
+                continue
+
+            matches = True
+            for key, expected in expected_fields.items():
+                if msg.get(key) != expected:
+                    matches = False
+                    break
+
+            if matches:
+                return msg
 
     # ------------------------------------------------------------------
     # Animation handshake
@@ -138,8 +216,6 @@ class UnityBridge:
     def _unity_action(action: str) -> str:
         value = str(action or "").strip().upper()
 
-        # Unity currently has Think / Call / Raise / Idle.
-        # All betting sizes and ALL-IN use Raise for now.
         if value in {"ALL-IN", "ALL_IN", "ALLIN", "ALL IN"}:
             return "RAISE"
         if "RAISE" in value or "POT" in value or "BET" in value:
@@ -151,8 +227,6 @@ class UnityBridge:
         if value == "IDLE":
             return "IDLE"
 
-        # CHECK/FOLD do not have their own clips yet.  Sending them is still
-        # useful: PokerReceiver immediately returns animation_done.
         return value
 
     def animate_and_wait(self, seat: int, action: str, amount: int | float = 0) -> None:
@@ -168,25 +242,24 @@ class UnityBridge:
             }
         )
 
-        while True:
-            msg = self._read_message()
-            msg_type = str(msg.get("type", "")).strip().lower()
-
-            if msg_type != "animation_done":
-                continue
-
-            try:
-                done_seat = int(msg.get("seat", -1))
-            except (TypeError, ValueError):
-                continue
-
-            if done_seat == seat:
-                return
+        self._wait_for("animation_done", seat=seat)
 
     # ------------------------------------------------------------------
-    # PokerEnv event hooks
+    # Chip-flow handshake
     # ------------------------------------------------------------------
-    def _send_public_state(self, env) -> None:
+    def collect_bets_and_wait(self, street: str = "") -> None:
+        self.send({"type": "collect_bets", "street": str(street)})
+        self._wait_for("chip_flow_done", flow="collect_bets")
+
+    def award_pot_and_wait(self, winner_seat: int) -> None:
+        winner_seat = int(winner_seat)
+        self.send({"type": "award_pot", "seat": winner_seat})
+        self._wait_for("chip_flow_done", flow="award_pot", seat=winner_seat)
+
+    # ------------------------------------------------------------------
+    # State helpers
+    # ------------------------------------------------------------------
+    def _send_public_state(self, env, *, pot_override: int | None = None) -> None:
         self.send(
             {
                 "type": "board",
@@ -194,13 +267,27 @@ class UnityBridge:
                 "street": env.street,
             }
         )
-        self.send({"type": "pot", "amount": int(env.pot)})
+
+        pot_value = int(env.pot) if pot_override is None else int(pot_override)
+        self.send({"type": "pot", "amount": pot_value})
+
+    def _send_board_only(self, env) -> None:
+        self.send(
+            {
+                "type": "board",
+                "cards": [card_to_str(c) for c in env.board],
+                "street": env.street,
+            }
+        )
 
     def _send_seat_state(self, env, seat: int) -> None:
         s = env.seats[int(seat)]
         self.send({"type": "stack", "seat": int(seat), "amount": int(s.stack)})
         self.send({"type": "bet", "seat": int(seat), "amount": int(s.street_contrib)})
 
+    # ------------------------------------------------------------------
+    # PokerEnv hooks
+    # ------------------------------------------------------------------
     def on_new_hand(self, env, agents) -> None:
         self.send(
             {
@@ -223,14 +310,15 @@ class UnityBridge:
             )
             self._send_seat_state(env, seat)
 
-        self._send_public_state(env)
+        # At the start of a hand the blinds are still physically on BetAnchors.
+        # Keep PotAnchor empty until the preflop betting round is collected.
+        self._send_public_state(env, pot_override=0)
 
     def before_action(self, env, seat: int, agents) -> None:
-        # Board/pot may have changed since the previous action (new street).
-        self._send_public_state(env)
+        # Keep board current, but do NOT rebuild PotAnchor while street bets are
+        # still sitting on BetAnchors.
+        self._send_board_only(env)
         self.send({"type": "turn", "seat": int(seat)})
-
-        # THINK blocks the poker loop until Unity's Think animation ends.
         self.animate_and_wait(int(seat), "THINK", 0)
 
     def after_action(self, env, seat: int, action: int, amount: int, agents) -> None:
@@ -245,22 +333,57 @@ class UnityBridge:
             }
         )
 
-        # This is the second blocking point.  The next actor cannot start until
-        # Unity says the action clip has finished. CHECK/FOLD return DONE
-        # immediately until dedicated clips are added.
         self.animate_and_wait(int(seat), action_name, amount)
 
         self._send_seat_state(env, seat)
-        self._send_public_state(env)
+        self._send_board_only(env)
+
+    def on_betting_round_end(self, env, agents) -> None:
+        # If no chips were committed on this street, there is nothing to move.
+        if not any(int(s.street_contrib) > 0 for s in env.seats):
+            return
+
+        self.collect_bets_and_wait(env.street)
+
+        # After the physical chips reached PotAnchor, reconcile the visual pot
+        # with Python's exact cumulative pot value.
+        self.send({"type": "pot", "amount": int(env.pot)})
+
+        # The next street starts with no current bets. Clear the BetAnchor UI now
+        # rather than waiting for every seat to act again.
+        for seat in range(4):
+            self.send({"type": "bet", "seat": seat, "amount": 0})
 
     def on_hand_end(self, env, agents, winners) -> None:
+        winners = [int(x) for x in winners]
+
+        # The normal case is one hand winner. Animate PotAnchor -> winner stack
+        # before rebuilding the authoritative final stacks.
+        if len(winners) == 1:
+            self.award_pot_and_wait(winners[0])
+        elif len(winners) > 1:
+            # Split-pot visual distribution is not implemented yet. Clear pot
+            # immediately below and let authoritative stacks show the split.
+            if self.verbose:
+                print(
+                    "[UNITY] split pot: skipping winner-flight animation for "
+                    f"winners={winners}"
+                )
+
         for seat in range(4):
-            self._send_seat_state(env, seat)
-        self._send_public_state(env)
+            # street_contrib is no longer a visible bet after hand payout.
+            s = env.seats[seat]
+            self.send({"type": "stack", "seat": seat, "amount": int(s.stack)})
+            self.send({"type": "bet", "seat": seat, "amount": 0})
+
+        # env.pot intentionally still contains the hand's historical pot after
+        # _award(), so the Unity visual must explicitly be zeroed here.
+        self._send_public_state(env, pot_override=0)
+
         self.send(
             {
                 "type": "hand_end",
-                "winners": [int(x) for x in winners],
+                "winners": winners,
                 "session_over": bool(env.session_over),
                 "session_winner": (
                     None if env.session_winner is None else int(env.session_winner)

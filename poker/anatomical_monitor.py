@@ -545,6 +545,14 @@ class PokerAnatomicalMonitor:
         if key == 27:
             self.close()
 
+    def pump_events(self):
+        """Process OpenCV window events without redrawing the monitor."""
+        if not self.enabled or not self._opened:
+            return
+        key = cv2.waitKey(1) & 0xFF
+        if key == 27:
+            self.close()
+
     def reset(self):
         for i in range(4):
             if self._spike_glow[i] is not None:
