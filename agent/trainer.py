@@ -6,6 +6,10 @@ from .simple_brain import SimpleFlyBrain
 from .strong_bot import StrongPokerBot
 from .evolution import Evolution
 from .checkpoints import checkpoint_generation
+from .reward import RewardSystem
+from .hall_of_fame import HallOfFame
+from .telemetry import ActionTelemetry, EventFanout
+import json
 
 
 class Trainer:
@@ -18,6 +22,11 @@ class Trainer:
         resume_path=None,
         with_bot=False,
         unity_bridge=None,
+        reward_mode="balanced",
+        win_bonus_bb=2.0,
+        risk_penalty=0.25,
+        top_k=5,
+        progress_every=500,
     ):
         self.cfg = config
         self.renderer = renderer
@@ -26,6 +35,16 @@ class Trainer:
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.with_bot = bool(with_bot)
         self.unity_bridge = unity_bridge
+        self.progress_every = max(0, int(progress_every))
+        self.reward_system = RewardSystem(
+            big_blind=config.big_blind,
+            mode=reward_mode,
+            win_bonus_bb=win_bonus_bb,
+            risk_penalty=risk_penalty,
+            bust_penalty_bb=config.bust_penalty_bb,
+        )
+        self.hall_of_fame = HallOfFame(self.out_dir, reward_mode=reward_mode, top_k=top_k)
+        self._last_reward_components = {}
 
         probe = PokerEnv(config, seed=config.seed)
         self.obs_size = probe.observation_size
@@ -54,7 +73,17 @@ class Trainer:
                         rng=rng,
                     )
                 )
-            self.start_generation = checkpoint_generation(resume_path) + 1
+            resume_generation = checkpoint_generation(resume_path)
+            if resume_generation == 0 and Path(resume_path).name == "best_ever.npz":
+                metadata = Path(resume_path).parent / "leaderboard.json"
+                if metadata.exists():
+                    entries = json.loads(metadata.read_text(encoding="utf-8")).get("entries", [])
+                    if entries:
+                        resume_generation = int(entries[0]["generation"])
+            # Resuming an earlier best must never overwrite newer generation
+            # checkpoint files already in the user's checkpoints folder.
+            existing = [checkpoint_generation(x) for x in self.out_dir.glob("best_brain_gen_*.npz")]
+            self.start_generation = max([resume_generation] + existing) + 1
             self.resume_path = str(resume_path)
         else:
             rng = np.random.default_rng(config.seed)
@@ -84,36 +113,21 @@ class Trainer:
                 mode += " • RESUMED"
             self.renderer.set_mode_text(mode)
 
-    def _fitness_metrics(
-        self,
-        total_profit,
-        bust_counts,
-        hands_played,
-        sessions_played=None,
-    ):
-        total_profit = np.asarray(total_profit, dtype=np.float64)
-        bust_counts = np.asarray(bust_counts, dtype=np.float64)
-        hands = np.maximum(1.0, np.asarray(hands_played, dtype=np.float64))
-        if hands.ndim == 0:
-            hands = np.full(4, float(hands), dtype=np.float64)
-
+    def _fitness_metrics(self, total_profit, bust_counts, hands_played,
+                         sessions_played=None, table_wins=None, profit_samples=None):
         if sessions_played is None:
-            sessions = hands
-        else:
-            sessions = np.maximum(1.0, np.asarray(sessions_played, dtype=np.float64))
-            if sessions.ndim == 0:
-                sessions = np.full(4, float(sessions), dtype=np.float64)
-
-        raw_bb100 = (total_profit / self.cfg.big_blind) / hands * 100.0
-
-        # Displayed bust rate = percentage of table sessions in which a fly
-        # was eliminated. The penalty itself is still normalized per 100 hands.
-        bust_rate = bust_counts / sessions
-        bust_penalty_bb100 = (
-            bust_counts * float(self.cfg.bust_penalty_bb) / hands * 100.0
+            sessions_played = hands_played
+        calculated = self.reward_system.calculate(
+            total_profit, bust_counts, hands_played, sessions_played,
+            table_wins=table_wins, profit_samples=profit_samples,
         )
-        fitness = raw_bb100 - bust_penalty_bb100
-        return fitness, raw_bb100, bust_rate, bust_penalty_bb100
+        self._last_reward_components = calculated
+        return (
+            calculated["fitness"],
+            calculated["raw_bb100"],
+            calculated["bust_rate"],
+            calculated["bust_cost_bb100"],
+        )
 
     def _agents_for_session(self, session_idx):
         """Return fixed seat agents for one complete table session.
@@ -159,6 +173,8 @@ class Trainer:
         played_counts = np.zeros(4, dtype=np.int64)
         sessions_played = np.zeros(4, dtype=np.int64)
         table_wins = np.zeros(4, dtype=np.int64)
+        profit_samples = [[] for _ in range(4)]
+        telemetry = ActionTelemetry()
 
         bot_profit = 0.0
         bot_hands = 0
@@ -175,6 +191,8 @@ class Trainer:
         while True:
             session_idx += 1
             agents, seat_to_fly = self._agents_for_session(session_idx)
+            telemetry.set_mapping(seat_to_fly)
+            events = EventFanout(self.unity_bridge, telemetry)
             env.reset_session()
 
             for seat, fly_idx in enumerate(seat_to_fly):
@@ -202,6 +220,8 @@ class Trainer:
                         bust_counts,
                         played_counts,
                         sessions_played,
+                        table_wins=table_wins,
+                        profit_samples=profit_samples,
                     )
                     seat_fit = self._seat_values(current_fit, seat_to_fly, bot_value=0.0)
                     seat_bust = self._seat_values(
@@ -224,7 +244,7 @@ class Trainer:
                     )
                     callback = lambda e, s, a: self.renderer.render(e, s, a)
 
-                result = env.play_hand(agents, callback=callback, event_handler=self.unity_bridge)
+                result = env.play_hand(agents, callback=callback, event_handler=events)
                 profits = np.asarray(result["profits"], dtype=np.float64)
                 busted = np.asarray(result.get("busted", [False] * 4), dtype=np.int64)
 
@@ -236,6 +256,7 @@ class Trainer:
                         total_profit[fly_idx] += profits[seat]
                         bust_counts[fly_idx] += busted[seat]
                         played_counts[fly_idx] += 1
+                        profit_samples[fly_idx].append(float(profits[seat]))
 
                 if result.get("session_over"):
                     winner_seat = int(result["session_winner"])
@@ -244,6 +265,10 @@ class Trainer:
                         bot_table_wins += 1
                     else:
                         table_wins[winner_fly] += 1
+
+                if self.progress_every and hand_idx % self.progress_every == 0:
+                    print(f"  GEN {generation:04d} | {hand_idx} hands | "
+                          f"{session_idx} tables | stacks {[s.stack for s in env.seats]}", flush=True)
 
                 if self.renderer is not None and self.renderer.closed:
                     stopped = True
@@ -264,10 +289,14 @@ class Trainer:
             bust_counts,
             played_counts,
             sessions_played,
+            table_wins=table_wins,
+            profit_samples=profit_samples,
         )
 
         metrics = {
             "raw_bb100": raw_bb100,
+            "table_win_bonus_bb100": self._last_reward_components["table_win_bonus_bb100"],
+            "risk_cost_bb100": self._last_reward_components["risk_cost_bb100"],
             "bust_rate": bust_rate,
             "bust_counts": bust_counts,
             "bust_penalty_bb100": bust_penalty_bb100,
@@ -276,6 +305,7 @@ class Trainer:
             "table_wins": table_wins,
             "table_win_rate": table_wins / np.maximum(1, sessions_played),
             "sessions": int(session_idx),
+            **telemetry.summary(),
             "bot_profit": float(bot_profit),
             "bot_hands": int(bot_hands),
             "bot_sessions": int(bot_sessions),
@@ -303,12 +333,30 @@ class Trainer:
             checkpoint = self.out_dir / f"best_brain_gen_{gen:04d}.npz"
             champion.save(checkpoint)
 
+            is_new_best = self.hall_of_fame.consider(
+                generation=gen,
+                fly=best_idx + 1,
+                fitness=float(fitness[best_idx]),
+                checkpoint_path=checkpoint,
+                metrics={
+                    "raw_bb100": float(metrics["raw_bb100"][best_idx]),
+                    "bust_rate": float(metrics["bust_rate"][best_idx]),
+                    "table_wins": int(metrics["table_wins"][best_idx]),
+                    "hands": int(hands_played),
+                    "reward_mode": self.reward_system.mode,
+                    "win_bonus_bb": self.reward_system.win_bonus_bb,
+                    "risk_penalty": self.reward_system.risk_penalty,
+                },
+            )
+
             row = {
                 "generation": gen,
                 "hands": hands_played,
                 "sessions": metrics["sessions"],
                 "fitness": fitness.tolist(),
                 "raw_bb100": metrics["raw_bb100"].tolist(),
+                "table_win_bonus_bb100": metrics["table_win_bonus_bb100"].tolist(),
+                "risk_cost_bb100": metrics["risk_cost_bb100"].tolist(),
                 "bust_rate": metrics["bust_rate"].tolist(),
                 "bust_counts": metrics["bust_counts"].tolist(),
                 "bust_penalty_bb100": metrics["bust_penalty_bb100"].tolist(),
@@ -319,11 +367,18 @@ class Trainer:
                 "best_fly": best_idx + 1,
                 "best_fitness": float(fitness[best_idx]),
                 "checkpoint": str(checkpoint),
+                "new_best_ever": bool(is_new_best),
+                "reward_mode": self.reward_system.mode,
+                "action_counts": metrics["action_counts"],
+                "vpip_pct": metrics["vpip_pct"],
+                "pfr_pct": metrics["pfr_pct"],
                 "with_bot": self.with_bot,
                 "bot_bb100": float(metrics["bot_bb100"]),
                 "bot_table_wins": int(metrics["bot_table_wins"]),
             }
             history.append(row)
+            with (self.out_dir / "training_history.jsonl").open("a", encoding="utf-8") as f:
+                f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
             pieces = []
             for i in range(4):
@@ -332,7 +387,8 @@ class Trainer:
                     f"[raw {metrics['raw_bb100'][i]:+7.2f} | "
                     f"tables {int(metrics['table_wins'][i])}/{int(metrics['sessions_played'][i])} | "
                     f"bust {metrics['bust_rate'][i]*100:4.1f}% | "
-                    f"hands {int(metrics['played_counts'][i])}]"
+                    f"hands {int(metrics['played_counts'][i])} | "
+                    f"VPIP {metrics['vpip_pct'][i]:4.1f}% / PFR {metrics['pfr_pct'][i]:4.1f}%]"
                 )
 
             bot_piece = ""
@@ -345,7 +401,8 @@ class Trainer:
             print(
                 f"GEN {gen:04d} | {metrics['sessions']} TABLES | "
                 + " | ".join(pieces)
-                + f"{bot_piece} | BEST: Fly {best_idx+1}"
+                + f"{bot_piece} | BEST: Fly {best_idx+1}" +
+                (" | NEW HALL OF FAME #1" if is_new_best else "")
             )
 
             self.brains = next_brains

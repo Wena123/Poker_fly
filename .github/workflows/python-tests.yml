@@ -1,0 +1,26 @@
+name: FlyPoker Python tests
+on:
+  push:
+    paths:
+      - '**/*.py'
+      - 'requirements*.txt'
+      - '.github/workflows/python-tests.yml'
+  pull_request:
+    paths:
+      - '**/*.py'
+      - 'requirements*.txt'
+      - '.github/workflows/python-tests.yml'
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install minimal dependencies
+        run: python -m pip install -r requirements_headless.txt
+      - name: Check Python syntax
+        run: python -m compileall -q agent poker main.py unity_bridge.py
+      - name: Run regression tests without Unity
+        run: python RUN_TESTS.py

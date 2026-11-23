@@ -1,0 +1,44 @@
+FLYPOKER — SZYBKA SCIAGA KOMEND (Windows)
+Pelna lista z opisami: COMMANDS.md
+
+INSTALACJA
+py -m pip install -r requirements.txt
+py -m pip install -r requirements_headless.txt
+py -m pip install -r requirements_brain_monitor.txt
+
+TRYBY URUCHAMIANIA
+py main.py --headless --generations 100 --hands 5000
+py main.py --render --render-every 1 --generations 5 --hands 200
+py main.py --brain-monitor --generations 5 --hands 200
+py main.py --unity --headless --generations 10 --hands 200
+py main.py --unity --render --render-every 1 --generations 10 --hands 200
+py main.py --headless --with-bot --generations 50 --hands 1000
+
+UNITY DISCONNECT
+py main.py --unity --headless --unity-disconnect pause --generations 10 --hands 200
+py main.py --unity --headless --unity-disconnect continue --generations 10 --hands 200
+
+NAJLEPSZE MUCHY
+py main.py --list-best
+py main.py --watch-best --brain-monitor --hands 100
+py main.py --resume-best --headless --generations 50 --hands 5000
+py main.py --resume-latest --headless --generations 25 --hands 1000
+py main.py --watch-latest --hands 100
+
+REWARD
+py main.py --headless --reward-mode balanced --generations 50 --hands 1000
+py main.py --headless --reward-mode classic --generations 50 --hands 1000
+
+TESTY
+py RUN_TESTS.py
+py test_unity_bridge.py
+py tests_v39_features.py
+
+POMOC
+py main.py --help
+
+GIT (najlepiej na nowym branchu)
+git switch -c integration/flypoker-v40
+git add .
+git commit -m "Consolidate FlyPoker V40"
+git push -u origin integration/flypoker-v40

@@ -1,4 +1,5 @@
 import time
+from collections import deque
 from pathlib import Path
 
 import cv2
@@ -33,6 +34,8 @@ class PokerAnatomicalMonitor:
         self.update_interval = 1.0 / max(1.0, float(update_hz))
         self.enabled = bool(enabled)
         self._opened = False
+        self.user_closed = False
+        self._decision_history = [deque(maxlen=100) for _ in range(4)]
         self._last_update = 0.0
 
         self._anatomy_cache = {}
@@ -84,7 +87,7 @@ class PokerAnatomicalMonitor:
         )
 
     def open(self):
-        if not self.enabled or self._opened:
+        if not self.enabled or self._opened or self.user_closed:
             return
         cv2.namedWindow(self.title, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self.title, self.width, self.height)
@@ -471,6 +474,31 @@ class PokerAnatomicalMonitor:
         self._label(canvas, f"lit anatomy points: {mapped_points}", ax + 175, ay + 22, 0.34, 1, (232, 238, 245))
         self._label(canvas, f"MLP units: {len(acts)}", ax + 365, ay + 22, 0.34, 1, (232, 238, 245))
 
+        # New: actual masked action probabilities, top-3 alternatives, and a
+        # rolling plot of policy concentration. This is NOT calibrated win odds.
+        if policy_probs is not None and np.any(policy_probs):
+            probs = np.asarray(policy_probs, dtype=np.float64)
+            top = list(np.argsort(-probs)[:3])
+            peak = float(probs[top[0]])
+            live = probs[probs > 0]
+            entropy = float(-np.sum(live * np.log(np.maximum(live, 1e-12))))
+            norm_entropy = entropy / max(1e-12, np.log(max(2, len(live))))
+            self._decision_history[fly_idx].append(peak)
+            footer_y = ay + main_h - 55
+            cv2.rectangle(canvas, (ax+2, footer_y-17), (ax+aw-2, ay+main_h-2), (19, 21, 30), -1)
+            summary = " | ".join(f"{ACTION_LABELS[j]} {probs[j]:.0%}" for j in top)
+            self._label(canvas, "TOP ACTIONS: " + summary[:91], ax+10, footer_y, .35, 1)
+            self._label(canvas, f"policy peak {peak:.0%} | normalized entropy {norm_entropy:.2f} (not win equity)",
+                        ax+10, footer_y+17, .32, 1, (171, 207, 222))
+            # Simple sparkline of top-action probability across recent updates.
+            hist = self._decision_history[fly_idx]
+            if len(hist) > 1:
+                chart_x = ax+aw-112
+                chart_y = footer_y+5
+                pts = np.asarray([[chart_x+j*107/max(1,len(hist)-1),
+                                   chart_y+27-22*p] for j,p in enumerate(hist)], dtype=np.int32)
+                cv2.polylines(canvas, [pts], False, (150, 225, 150), 1, cv2.LINE_AA)
+
         # Right column = real state + status + decoder.
         input_h = 165
         status_h = 92
@@ -543,6 +571,7 @@ class PokerAnatomicalMonitor:
         )
         key = cv2.waitKey(1) & 0xFF
         if key == 27:
+            self.user_closed = True
             self.close()
 
     def pump_events(self):
@@ -551,6 +580,7 @@ class PokerAnatomicalMonitor:
             return
         key = cv2.waitKey(1) & 0xFF
         if key == 27:
+            self.user_closed = True
             self.close()
 
     def reset(self):

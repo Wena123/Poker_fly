@@ -1,0 +1,19 @@
+FLYPOKER V40 — START TUTAJ
+
+1) W obecnym repo Poker_fly zrob kopie / git commit starych zmian.
+2) Rozpakuj zawartosc ZIP BEZPOSREDNIO do katalogu Poker_fly,
+   scalajac foldery i podmieniajac tylko pliki tej paczki.
+   Nie kasuj starych assets/, checkpoints/ ani .git/.
+3) W terminalu:
+   py -m pip install -r requirements.txt
+   py RUN_TESTS.py
+   py main.py --headless --generations 1 --hands 20
+4) Jesli chcesz Unity, skopiuj pliki z Unity/Assets/Script/
+   do OSOBNEGO projektu Unity -> Assets/Script/.
+   Stara scena, modele, prefaby i klipy animacji zostaja bez zmian.
+5) Wszystkie komendy: COMMANDS.md lub COMMANDS.txt
+   Ustawienie Unity: UNITY_SETUP.md
+
+WAŻNE: W chwili tworzenia paczki GitHub odmowil dostepu do zapisu
+(403 Resource not accessible by integration), wiec te pliki NIE SA
+jeszcze zapushowane na Twoje repo.

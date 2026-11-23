@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.coverage
+# Generated data (does not remove files already tracked in Git)
+checkpoints/*.npz
+checkpoints/training_history.jsonl
+checkpoints/hall_of_fame/
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+# Unity transient data: keep Assets and ProjectSettings if you add Unity project later
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+UserSettings/

@@ -5,6 +5,7 @@ from config import Config
 from agent.trainer import Trainer
 from agent.watcher import Watcher
 from agent.checkpoints import latest_checkpoint
+from agent.hall_of_fame import HallOfFame
 
 
 def _resolve_latest():
@@ -17,12 +18,25 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--resume", type=str, metavar="CHECKPOINT", help="Kontynuuj trening od checkpointu.")
     mode.add_argument("--resume-latest", action="store_true", help="Kontynuuj trening od najnowszego checkpointu.")
+    mode.add_argument("--resume-best", action="store_true", help="Wznów trening z best_ever.npz w Hall of Fame.")
     mode.add_argument("--watch", type=str, metavar="CHECKPOINT", help="Oglądaj checkpoint BEZ uczenia/mutacji.")
     mode.add_argument("--watch-latest", action="store_true", help="Oglądaj najnowszy checkpoint BEZ uczenia.")
+    mode.add_argument("--watch-best", action="store_true", help="Oglądaj najlepszego championa z Hall of Fame.")
     mode.add_argument("--watch-train", type=str, metavar="CHECKPOINT", help="Kontynuuj trening od checkpointu i pokazuj go na żywo.")
     mode.add_argument("--watch-train-latest", action="store_true", help="Kontynuuj najnowszy checkpoint z podglądem na żywo.")
 
-    parser.add_argument("--render", action="store_true", help="Włącz Pygame + monitor podczas zwykłego treningu.")
+    visual = parser.add_mutually_exclusive_group()
+    visual.add_argument("--render", action="store_true", help="Włącz Pygame + monitor podczas treningu.")
+    visual.add_argument("--brain-monitor", action="store_true", help="Monitor mózgu OpenCV bez Pygame.")
+    visual.add_argument("--headless", action="store_true", help="Bez Pygame, OpenCV i okien; opcjonalnie z Unity.")
+    parser.add_argument("--monitor-hz", type=float, default=10.0, help="Maksymalne odświeżanie brain-monitor.")
+    parser.add_argument("--reward-mode", choices=("classic", "balanced"), default="balanced",
+                        help="classic: stary bb/100-bust; balanced: +win bonus -downside risk.")
+    parser.add_argument("--win-bonus-bb", type=float, default=2.0, help="Bonus w BB za wygranie całego stołu.")
+    parser.add_argument("--risk-penalty", type=float, default=0.25, help="Waga niewielkiej kary za dotkliwe przegrane rozdania.")
+    parser.add_argument("--top-k", type=int, default=5, help="Ilu championów zachować w Hall of Fame.")
+    parser.add_argument("--list-best", action="store_true", help="Wyświetl zapisany ranking i zakończ.")
+    parser.add_argument("--progress-every", type=int, default=500, help="Co ile rozdań logować postęp do terminala (0 wyłącza).")
     parser.add_argument("--unity", action="store_true", help="Połącz z Unity i czekaj na zakończenie każdej animacji przed kolejnym ruchem.")
     parser.add_argument("--unity-host", type=str, default="127.0.0.1", help="Adres hosta Unity PokerReceiver.")
     parser.add_argument("--unity-port", type=int, default=8765, help="Port Unity PokerReceiver.")
@@ -38,6 +52,10 @@ def main():
     parser.add_argument("--render-every", type=int, default=None, help="W treningu pokazuj co N-te rozdanie. Watch-train domyślnie pokazuje każde.")
     args = parser.parse_args()
 
+    if args.list_best:
+        HallOfFame(reward_mode=args.reward_mode, top_k=args.top_k).print_ranking()
+        return
+
     cfg = Config()
     if args.hands is not None and not (args.watch or args.watch_latest):
         cfg.hands_per_generation = max(1, int(args.hands))
@@ -49,6 +67,10 @@ def main():
 
     if args.watch:
         watch_path = Path(args.watch)
+    elif args.watch_best:
+        watch_path = Path("checkpoints") / "hall_of_fame" / args.reward_mode / "best_ever.npz"
+    elif args.resume_best:
+        resume_path = Path("checkpoints") / "hall_of_fame" / args.reward_mode / "best_ever.npz"
     elif args.watch_latest:
         watch_path = _resolve_latest()
     elif args.watch_train:
@@ -68,10 +90,15 @@ def main():
         parser.error(f"Checkpoint does not exist: {resume_path}")
 
     renderer = None
-    needs_render = bool(args.render or force_render or watch_path is not None)
+    needs_render = bool(args.render or (force_render or watch_path is not None) and not args.headless and not args.brain_monitor)
+    if args.headless:
+        needs_render = False
     if needs_render:
         from poker.renderer import PygameRenderer
         renderer = PygameRenderer()
+    elif args.brain_monitor:
+        from poker.brain_monitor_renderer import BrainMonitorRenderer
+        renderer = BrainMonitorRenderer(update_hz=max(1., args.monitor_hz))
 
     unity_bridge = None
     if args.unity:
@@ -122,7 +149,7 @@ def main():
                 f"render={'ON' if needs_render else 'OFF'}"
             )
 
-        render_every = args.render_every if args.render_every is not None else (1 if force_render else 100)
+        render_every = args.render_every if args.render_every is not None else (1 if (force_render or args.brain_monitor) else 100)
         trainer = Trainer(
             cfg,
             renderer=renderer,
@@ -130,6 +157,11 @@ def main():
             resume_path=resume_path,
             with_bot=args.with_bot,
             unity_bridge=unity_bridge,
+            reward_mode=args.reward_mode,
+            win_bonus_bb=args.win_bonus_bb,
+            risk_penalty=args.risk_penalty,
+            top_k=args.top_k,
+            progress_every=args.progress_every,
         )
         trainer.run(generations=args.generations)
 
