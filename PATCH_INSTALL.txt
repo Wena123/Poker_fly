@@ -1,0 +1,16 @@
+FlyPoker V39 (PATCH)
+
+For your existing Poker_fly folder:
+1. Stop running main.py.
+2. Back up your current Python files/checkpoints.
+3. Open the ZIP folder Python/ and COPY ITS CONTENTS into your existing Poker_fly folder.
+   Example: Python/agent/trainer.py -> Poker_fly/agent/trainer.py
+   Example: Python/main.py -> Poker_fly/main.py
+   DO NOT replace Unity scripts or your checkpoints folder.
+4. Headless mode needs only: python -m pip install numpy
+5. Run: python main.py --headless --generations 100 --hands 5000
+6. See README_V39.txt for brain monitor, ranking, resume-best and rewards.
+
+This patch is based on V38 reconnect scripts, V21 betting/chip flow environment,
+and V20's original brain/renderer. If your local Python source differs, prefer
+patching your custom edits carefully instead of blindly overwriting them.
