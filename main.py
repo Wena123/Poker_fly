@@ -27,6 +27,11 @@ def main():
     parser.add_argument("--unity-host", type=str, default="127.0.0.1", help="Adres hosta Unity PokerReceiver.")
     parser.add_argument("--unity-port", type=int, default=8765, help="Port Unity PokerReceiver.")
     parser.add_argument("--unity-timeout", type=float, default=60.0, help="Maksymalny czas oczekiwania na animation_done w sekundach.")
+    parser.add_argument(
+        "--unity-disconnect", choices=("pause", "continue"), default="pause",
+        help="Po utracie Unity: pause=czekaj na Play Mode i wznow animacje (domyslnie); "
+             "continue=trenuj bez Unity i polacz ponownie na poczatku rozdania.",
+    )
     parser.add_argument("--with-bot", "--bot", dest="with_bot", action="store_true", help="Dodaj stałego StrongPokerBot jako przeciwnika.")
     parser.add_argument("--generations", type=int, default=None, help="Ile nowych generacji wytrenować.")
     parser.add_argument("--hands", type=int, default=None, help="Minimalna liczba rąk. Rozpoczęty stół zawsze jest dogrywany aż zostanie 1 gracz.")
@@ -76,10 +81,12 @@ def main():
             port=args.unity_port,
             timeout=max(1.0, float(args.unity_timeout)),
             verbose=True,
+            disconnect_mode=args.unity_disconnect,
         )
-        unity_bridge.connect()
+        # Pump Pygame even while waiting for the FIRST Unity connection.
         if renderer is not None:
             unity_bridge.set_wait_pump(renderer.pump_waiting)
+        unity_bridge.connect()
 
     try:
         if watch_path is not None:

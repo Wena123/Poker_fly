@@ -28,19 +28,29 @@ class UnityBridge:
         timeout: float = 60.0,
         verbose: bool = True,
         poll_interval: float = 0.02,
+        disconnect_mode: str = "pause",
+        reconnect_interval: float = 1.0,
     ):
         self.host = str(host)
         self.port = int(port)
         self.timeout = float(timeout)
         self.verbose = bool(verbose)
         self.poll_interval = max(0.005, float(poll_interval))
+        if disconnect_mode not in ("pause", "continue"):
+            raise ValueError("disconnect_mode must be 'pause' or 'continue'")
+        self.disconnect_mode = disconnect_mode
+        self.reconnect_interval = max(0.1, float(reconnect_interval))
+        self._next_connect_try = 0.0
+        self._needs_resync = False
+        self._offline_announced = False
+        self._visual_state: dict[str, Any] = {}
 
         self.sock: socket.socket | None = None
         self._recv_buffer = bytearray()
         self._wait_pump: Callable[[], None] | None = None
 
     # ------------------------------------------------------------------
-    # Connection
+    # Connection and state recovery
     # ------------------------------------------------------------------
     @property
     def connected(self) -> bool:
@@ -60,36 +70,119 @@ class UnityBridge:
                 print(f"[UNITY] wait-pump warning: {exc}")
             self._wait_pump = None
 
-    def connect(self) -> None:
-        if self.connected:
+    def _remember(self, payload: dict[str, Any]) -> None:
+        """Retain latest authoritative visual state for a Unity Play Mode restart."""
+        typ = payload.get("type")
+        state = self._visual_state
+        if typ == "new_hand":
+            state.clear()
+            state["new_hand"] = dict(payload)
+            state["holes"] = {}
+            state["stacks"] = {}
+            state["bets"] = {}
+            state["actions"] = {}
             return
+        if typ == "hole_cards":
+            state.setdefault("holes", {})[int(payload["seat"])] = dict(payload)
+        elif typ == "stack":
+            state.setdefault("stacks", {})[int(payload["seat"])] = dict(payload)
+        elif typ == "bet":
+            state.setdefault("bets", {})[int(payload["seat"])] = dict(payload)
+        elif typ == "action":
+            state.setdefault("actions", {})[int(payload["seat"])] = dict(payload)
+        elif typ in {"board", "pot", "turn", "hand_end"}:
+            state[typ] = dict(payload)
 
+    def _snapshot_messages(self) -> list[dict[str, Any]]:
+        s = self._visual_state
+        messages = []
+        if "new_hand" in s:
+            messages.append(s["new_hand"])
+        for key in ("holes", "stacks", "bets"):
+            for seat in sorted(s.get(key, {})):
+                messages.append(s[key][seat])
+        for key in ("board", "pot", "turn"):
+            if key in s:
+                messages.append(s[key])
+        for seat in sorted(s.get("actions", {})):
+            messages.append(s["actions"][seat])
+        if "hand_end" in s:
+            messages.append(s["hand_end"])
+        return messages
+
+    def _send_raw(self, payload: dict[str, Any]) -> None:
+        if self.sock is None:
+            raise ConnectionError("Unity socket is not connected.")
+        line = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         if self.verbose:
-            print(f"[UNITY] Connecting to {self.host}:{self.port} ...")
+            print(f"[PYTHON -> UNITY] {line}")
+        self.sock.sendall((line + "\n").encode("utf-8"))
 
+    def _drop(self, reason: str) -> None:
+        # Important: keep last poker state for replay on reconnect.
+        self._needs_resync = True
+        self.close()
+        if not self._offline_announced:
+            if self.disconnect_mode == "pause":
+                print(f"[UNITY] {reason}. Python PAUSED; waiting for Unity Play Mode (Ctrl+C to quit).")
+            else:
+                print(f"[UNITY] {reason}. Continuing training WITHOUT Unity; reattach on a new hand.")
+            self._offline_announced = True
+
+    def _try_connect_once(self) -> bool:
+        if self.connected:
+            return True
+        now = time.monotonic()
+        if now < self._next_connect_try:
+            return False
+        self._next_connect_try = now + self.reconnect_interval
         try:
-            sock = socket.create_connection(
-                (self.host, self.port),
-                timeout=min(10.0, max(1.0, self.timeout)),
-            )
-        except OSError as exc:
-            raise RuntimeError(
-                f"Cannot connect to Unity at {self.host}:{self.port}. "
-                "Start Unity Play mode first so PokerReceiver is listening."
-            ) from exc
+            sock = socket.create_connection((self.host, self.port), timeout=0.75)
+            sock.settimeout(None)
+        except OSError:
+            return False
 
-        sock.settimeout(None)
         self.sock = sock
         self._recv_buffer.clear()
+        try:
+            if self._needs_resync:
+                snapshot = self._snapshot_messages()
+                for item in snapshot:
+                    self._send_raw(item)
+                if self.verbose and snapshot:
+                    print(f"[UNITY] Restored {len(snapshot)} state messages after reconnection.")
+            self._needs_resync = False
+        except OSError:
+            self.close()
+            self._needs_resync = True
+            return False
 
-        if self.verbose:
-            print("[UNITY] Connected.")
+        self._offline_announced = False
+        print(f"[UNITY] Connected to {self.host}:{self.port}.")
+        return True
+
+    def _ensure_connected(self, *, wait: bool) -> bool:
+        if self.connected:
+            return True
+        if not wait:
+            return self._try_connect_once()
+
+        while not self._try_connect_once():
+            if not self._offline_announced:
+                print(f"[UNITY] Waiting for Unity Play Mode on {self.host}:{self.port} (Ctrl+C to quit)...")
+                self._offline_announced = True
+            self._pump_wait_ui()
+            time.sleep(self.poll_interval)
+        return True
+
+    def connect(self) -> bool:
+        """Pause mode waits for Unity; continue mode starts headless if absent."""
+        return self._ensure_connected(wait=self.disconnect_mode == "pause")
 
     def close(self) -> None:
         sock = self.sock
         self.sock = None
         self._recv_buffer.clear()
-
         if sock is not None:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
@@ -103,26 +196,29 @@ class UnityBridge:
     # ------------------------------------------------------------------
     # Raw protocol
     # ------------------------------------------------------------------
-    def send(self, payload: dict[str, Any]) -> None:
+    def send(self, payload: dict[str, Any]) -> bool:
+        self._remember(payload)
         if self.sock is None:
-            raise RuntimeError("UnityBridge is not connected.")
-
-        line = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
-        if self.verbose:
-            print(f"[PYTHON -> UNITY] {line}")
-
-        try:
-            self.sock.sendall((line + "\n").encode("utf-8"))
-        except OSError as exc:
-            self.close()
-            raise ConnectionError("Unity disconnected while Python was sending data.") from exc
+            # In continue mode, only on_new_hand may reattach, to avoid
+            # reconnecting into the middle of an unfinished Unity hand.
+            if self.disconnect_mode == "continue":
+                return False
+            self._ensure_connected(wait=True)
+        while True:
+            try:
+                self._send_raw(payload)
+                return True
+            except OSError:
+                self._drop("Connection lost while sending")
+                if self.disconnect_mode == "continue":
+                    return False
+                self._ensure_connected(wait=True)
 
     def _pop_buffered_line(self) -> str | None:
         try:
             idx = self._recv_buffer.index(10)
         except ValueError:
             return None
-
         raw = bytes(self._recv_buffer[:idx])
         del self._recv_buffer[: idx + 1]
         return raw.rstrip(b"\r").decode("utf-8", errors="replace")
@@ -130,10 +226,9 @@ class UnityBridge:
     def _read_message(self) -> dict[str, Any]:
         sock = self.sock
         if sock is None:
-            raise RuntimeError("UnityBridge is not connected.")
+            raise ConnectionError("Unity socket is not connected.")
 
         deadline = time.monotonic() + self.timeout
-
         while True:
             buffered = self._pop_buffered_line()
             if buffered is not None:
@@ -143,71 +238,62 @@ class UnityBridge:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError(
-                    f"Unity did not answer within {self.timeout:g}s. "
-                    "Check Unity Console and the corresponding DONE event."
+                    f"Unity did not answer within {self.timeout:g}s"
                 )
 
             self._pump_wait_ui()
-
             try:
                 readable, _, _ = select.select(
                     [sock], [], [], min(self.poll_interval, remaining)
                 )
             except (OSError, ValueError) as exc:
-                self.close()
-                raise ConnectionError(
-                    "Unity socket became invalid while Python was waiting."
-                ) from exc
-
+                raise ConnectionError("Unity socket became invalid") from exc
             if not readable:
                 continue
-
             try:
                 chunk = sock.recv(4096)
             except OSError as exc:
-                self.close()
-                raise ConnectionError(
-                    "Unity disconnected while Python was waiting for a reply."
-                ) from exc
-
+                raise ConnectionError("Unity socket disconnected") from exc
             if not chunk:
-                self.close()
-                raise ConnectionError(
-                    "Unity disconnected while Python was waiting for a reply."
-                )
-
+                raise ConnectionError("Unity closed the connection")
             self._recv_buffer.extend(chunk)
 
         if self.verbose:
             print(f"[UNITY -> PYTHON] {line}")
-
         if not line:
             return {}
-
         try:
             value = json.loads(line)
         except json.JSONDecodeError:
             return {"type": line}
-
         return value if isinstance(value, dict) else {"value": value}
 
     def _wait_for(self, message_type: str, **expected_fields: Any) -> dict[str, Any]:
         expected_type = str(message_type).strip().lower()
-
         while True:
             msg = self._read_message()
-            msg_type = str(msg.get("type", "")).strip().lower()
-            if msg_type != expected_type:
+            if str(msg.get("type", "")).strip().lower() != expected_type:
                 continue
-
-            matches = True
-            for key, expected in expected_fields.items():
-                if msg.get(key) != expected:
-                    matches = False
-                    break
-
-            if matches:
+            if all(msg.get(key) == value for key, value in expected_fields.items()):
                 return msg
+
+    def _send_and_wait(self, payload: dict[str, Any], ack_type: str, **fields: Any) -> bool:
+        """Retry an interrupted animation/flow when Unity restarts.
+
+        'pause': preserve the hand; wait/reconnect/resend snapshot + action.
+        'continue': skip visual effect and continue poker training headless.
+        """
+        while True:
+            if not self.send(payload):
+                return False
+            try:
+                self._wait_for(ack_type, **fields)
+                return True
+            except (ConnectionError, TimeoutError, OSError) as exc:
+                self._drop(str(exc))
+                if self.disconnect_mode == "continue":
+                    return False
+                self._ensure_connected(wait=True)
 
     # ------------------------------------------------------------------
     # Animation handshake
@@ -233,28 +319,35 @@ class UnityBridge:
         seat = int(seat)
         action = self._unity_action(action)
 
-        self.send(
+        self._send_and_wait(
             {
                 "type": "animation",
                 "seat": seat,
                 "action": action,
                 "amount": int(round(float(amount))),
-            }
+            },
+            "animation_done",
+            seat=seat,
         )
-
-        self._wait_for("animation_done", seat=seat)
 
     # ------------------------------------------------------------------
     # Chip-flow handshake
     # ------------------------------------------------------------------
     def collect_bets_and_wait(self, street: str = "") -> None:
-        self.send({"type": "collect_bets", "street": str(street)})
-        self._wait_for("chip_flow_done", flow="collect_bets")
+        self._send_and_wait(
+            {"type": "collect_bets", "street": str(street)},
+            "chip_flow_done",
+            flow="collect_bets",
+        )
 
     def award_pot_and_wait(self, winner_seat: int) -> None:
         winner_seat = int(winner_seat)
-        self.send({"type": "award_pot", "seat": winner_seat})
-        self._wait_for("chip_flow_done", flow="award_pot", seat=winner_seat)
+        self._send_and_wait(
+            {"type": "award_pot", "seat": winner_seat},
+            "chip_flow_done",
+            flow="award_pot",
+            seat=winner_seat,
+        )
 
     # ------------------------------------------------------------------
     # State helpers
@@ -289,6 +382,9 @@ class UnityBridge:
     # PokerEnv hooks
     # ------------------------------------------------------------------
     def on_new_hand(self, env, agents) -> None:
+        # In continue mode only reconnect at a clean hand boundary.
+        if self.disconnect_mode == "continue" and not self.connected:
+            self._ensure_connected(wait=False)
         self.send(
             {
                 "type": "new_hand",
