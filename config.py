@@ -14,6 +14,11 @@ class Config:
     # Safety guard only; normal no-limit betting is stack-limited.
     max_actions_per_street: int = 600
 
+    # Safety cap for a table that never gets a sole survivor (e.g. two
+    # deterministic agents keep folding alternating blinds forever).
+    # Only complete hands count; capped sessions award NO table winner.
+    max_hands_per_session: int = 500
+
     # Small extra evolutionary penalty for being eliminated from a table.
     # The lost chips already hurt raw BB/100; this is intentionally small.
     bust_penalty_bb: float = 5.0

@@ -1,3 +1,5 @@
+> **Aktualizacja V42:** nowe treningi i benchmarki opisuje [README_V42.md](README_V42.md); nowe polecenia są na górze [COMMANDS.md](COMMANDS.md).
+
 # FlyPoker — Python + Unity (wersja zintegrowana V40)
 
 Projekt gry Texas Hold'em dla czterech much, w którym **Python decyduje o stanie gry i treningu**, a **Unity odpowiada za wizualizację**. Repozytorium zawiera kod Pythona oraz gotowy, scalony zestaw skryptów C#; **nie zawiera kompletnej sceny Unity, modeli ani klipów animacji używanych w Twoim lokalnym projekcie**.

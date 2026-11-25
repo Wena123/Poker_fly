@@ -4,6 +4,7 @@ import numpy as np
 
 from .cards import make_deck, card_to_str
 from .evaluator import evaluate_best
+from .hand_features import HAND_FEATURE_COUNT, hand_features
 
 # ---------------------------------------------------------------------------
 # Discrete no-limit action space
@@ -113,13 +114,14 @@ class PokerEnv:
         self.last_winners = []
         self.side_pots = []
 
-        # Keep the same 216-input observation layout as V15.
+        # V43: seven own-card/public-board descriptors immediately before legal mask.
+        # Old 216-input checkpoints can still be used (see SimpleFlyBrain.resize_input).
         self.observation_size = (
             52 + 52 + 4 + 4 + 4 + 6
             + 4 + 4 + 4 + 4
             + 4 * (ACTION_COUNT + 1)
             + 4
-            + ACTION_COUNT
+            + ACTION_COUNT + HAND_FEATURE_COUNT
         )
 
     # ------------------------------------------------------------------
@@ -424,6 +426,8 @@ class PokerEnv:
         parts.append(last)
 
         parts.append(np.array([x.last_amount / start for x in self.seats], dtype=np.float32))
+
+        parts.append(hand_features(s.hole, self.board, self.pot, to_call))
 
         legal_mask = np.zeros(ACTION_COUNT, dtype=np.float32)
         for a in self._legal_actions(seat_idx):

@@ -7,7 +7,8 @@ TESTS = [
     "tests_smoke.py", "tests_actions.py", "tests_hierarchical.py",
     "tests_table_session.py", "tests_modes.py", "tests_winner_labels.py",
     "tests_win_history.py", "test_unity_bridge.py",
-    "tests_v39_features.py", "tests_unity_api.py",
+    "tests_v39_features.py", "tests_session_cap.py",
+    "tests_v42_training.py", "tests_v43_training.py", "tests_unity_api.py",
 ]
 
 

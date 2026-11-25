@@ -20,10 +20,7 @@ class Watcher:
 
         probe = PokerEnv(config, seed=config.seed)
         if self.brain.input_size != probe.observation_size:
-            raise ValueError(
-                f"Checkpoint input size {self.brain.input_size} does not match "
-                f"current environment {probe.observation_size}."
-            )
+            self.brain = self.brain.resize_input(probe.observation_size)
 
         self.generation = checkpoint_generation(self.checkpoint)
         self.bot = StrongPokerBot(config, seed=config.seed + 777) if self.with_bot else None
@@ -56,13 +53,15 @@ class Watcher:
 
         played = 0
         sessions = 0
+        capped_sessions = 0
+        session_cap = max(1, int(getattr(self.cfg, "max_hands_per_session", 500)))
 
-        # Watch at least `hands`, but never cut a table in the middle.
+        # Watch at least `hands`; terminate stalled tables at the safety cap.
         while True:
             sessions += 1
             env.reset_session()
 
-            while not env.session_over:
+            while not env.session_over and env.session_hand_no < session_cap:
                 played += 1
 
                 if self.renderer is not None:
@@ -92,11 +91,16 @@ class Watcher:
                     return {
                         "hands": played,
                         "sessions": sessions,
+                        "capped_sessions": capped_sessions,
                         "profits": total_profit.tolist(),
                         "bb100": ((total_profit / self.cfg.big_blind) / max(1, played) * 100.0).tolist(),
                         "bust_rate": (busts / max(1, sessions)).tolist(),
                         "table_wins": table_wins.tolist(),
                     }
+
+            if not env.session_over:
+                capped_sessions += 1
+                print(f"WATCH | TABLE {sessions} capped at {session_cap} hands; no table winner", flush=True)
 
             if played >= target_hands:
                 break
@@ -104,6 +108,7 @@ class Watcher:
         return {
             "hands": played,
             "sessions": sessions,
+            "capped_sessions": capped_sessions,
             "profits": total_profit.tolist(),
             "bb100": ((total_profit / self.cfg.big_blind) / max(1, played) * 100.0).tolist(),
             "bust_rate": (busts / max(1, sessions)).tolist(),

@@ -1,0 +1,33 @@
+FlyPoker V42 — AI benchmark + mixed evolution
+
+WYMAGANIA: masz juz dzialajacy FlyPoker V41 w folderze Poker_fly.
+
+1. Zatrzymaj Python: Ctrl+C.
+2. Zrob kopie folderu checkpoints/ (nie usuwaj go!).
+3. Rozpakuj ten ZIP, skopiuj jego ZAWARTOSC (nie nowy folder) do
+   C:\Users\Admin\Documents\GitHub\Poker_fly\
+   Tak by pliki trafily np. do Poker_fly\agent\trainer.py.
+4. Zastap pliki o takich samych nazwach. Pozostalych plikow nie ruszaj.
+5. Nie zmieniaj nic w Unity.
+6. Uruchom (w katalogu Poker_fly):
+
+   py tests_v42_training.py
+   py main.py --help
+
+7. Przykladowy trening od ostatniego checkpointu:
+
+   py main.py --resume-latest --headless --train-mode mixed --bot-fraction 0.5 --generations 100 --hands 5000 --max-session-hands 500 --benchmark-tables 2 --benchmark-weight 0.75 --immigrant-every 10 --progress-every 500
+
+8. Po pierwszej ukończonej generacji:
+
+   py main.py --list-benchmark
+
+9. Szczegoly i wszystkie komendy: README_V42.md oraz COMMANDS.md.
+
+WAZNE:
+- Nie usuwaj starego checkpoints/ i nie nadpisuj sceny Unity.
+- Ocena benchmarku robi dodatkowe rozdania; trening bedzie wolniejszy.
+- Kontrola: BENCH to wynik do selekcji; HOLDOUT to osobna ocena.
+- Uczace sie muchy nadal nie musza byc dobre. Weryfikuj na NOWYM seedzie.
+- Ranking dawnego fitness i ranking niezaleznego testu sa ODDZIELNE.
+- Nie zmieniaj plikow Pythona podczas aktywnego treningu.

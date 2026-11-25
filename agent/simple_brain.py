@@ -1,4 +1,5 @@
 import numpy as np
+from poker.hand_features import HAND_FEATURE_COUNT
 from .brain_interface import BrainInterface
 
 
@@ -68,8 +69,37 @@ class SimpleFlyBrain(BrainInterface):
             probs[legal] = e / denom
         return probs
 
+    def _normalize_observation(self, x):
+        """Old and new checkpoints see the same original 216 values.
+
+        Old models ignore inserted engineered features. V43 models receive
+        zero features when evaluating a legacy 216 observation.
+        """
+        x = np.asarray(x, dtype=np.float32).reshape(-1)
+        if len(x) == self.input_size:
+            return x
+        if len(x) == self.input_size + HAND_FEATURE_COUNT:
+            return np.concatenate((x[:-14-HAND_FEATURE_COUNT], x[-14:]))
+        if len(x) + HAND_FEATURE_COUNT == self.input_size:
+            return np.concatenate((x[:-14], np.zeros(HAND_FEATURE_COUNT, np.float32), x[-14:]))
+        raise ValueError(f"Brain input size {self.input_size}, observation {len(x)}")
+
+    def resize_input(self, target_input_size):
+        """Zero-pad trained weights, keeping legacy decisions exactly intact."""
+        target = int(target_input_size)
+        if target == self.input_size:
+            return self
+        if target != self.input_size + HAND_FEATURE_COUNT:
+            raise ValueError(f"Cannot migrate brain input {self.input_size} -> {target}")
+        result = self.copy()
+        result.w1 = np.concatenate((result.w1[:-14],
+                                    np.zeros((HAND_FEATURE_COUNT, result.hidden_1), np.float32),
+                                    result.w1[-14:]), axis=0)
+        result.input_size = target
+        return result
+
     def _heads(self, x):
-        x = np.asarray(x, dtype=np.float32)
+        x = self._normalize_observation(x)
         h1 = np.tanh(x @ self.w1 + self.b1)
         h2 = np.tanh(h1 @ self.w2 + self.b2)
         action_head = h2 @ self.w_action + self.b_action

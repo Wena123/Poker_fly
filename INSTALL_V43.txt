@@ -1,0 +1,19 @@
+FlyPoker V43 — instalacja
+========================
+1. Zatrzymaj Pythona (Ctrl+C).
+2. Zrob kopie folderu checkpoints i projektu.
+3. Rozpakuj ZIP i skopiuj pliki z zachowaniem folderow agent i poker do katalogu Poker_fly.
+4. NIE usuwaj .git, checkpoints i plikow Unity. ZIP NIE zawiera checkpointow i Unity.
+5. py tests_v43_training.py
+6. py main.py --help
+
+NOWY TRENING:
+py main.py --resume checkpoints/hall_of_fame/balanced/best_ever.npz --headless --selection-v43 --train-mode mixed --generations 20 --hands 5000 --benchmark-tables 8 --gate-tables 16 --teacher-hands 200 --progress-every 1000
+
+WZNOWIENIE:
+py main.py --resume-verified-best --headless --selection-v43 --train-mode mixed --generations 20 --hands 5000 --benchmark-tables 8 --gate-tables 16 --progress-every 1000
+
+POROWNANIE ZE STARYM CHAMPIONEM:
+py main.py --compare checkpoints/hall_of_fame/verified_v43/champion.npz checkpoints/hall_of_fame/balanced/best_ever.npz --gate-tables 25 --validation-seed 3456789
+
+PATRZ: README_V43.md
